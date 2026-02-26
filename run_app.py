@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 import webview
+from backend import start_backend_server
 
 # Ajusta estas rutas a tu estructura:
 # proyecto/
@@ -56,7 +57,9 @@ def start_react_dev_server() -> subprocess.Popen:
 
 def main():
     react_proc = None
+    backend_server = None
     try:
+        backend_server = start_backend_server()
         react_proc = start_react_dev_server()
         wait_for_url(DEV_URL, timeout_sec=45)
 
@@ -71,6 +74,10 @@ def main():
         webview.start()
 
     finally:
+        if backend_server:
+            backend_server.shutdown()
+            backend_server.server_close()
+            backend_server.thread.join(timeout=5)
         # Cierra el dev server al salir
         if react_proc and react_proc.poll() is None:
             react_proc.terminate()
