@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import "./App.css";
 
+const BACKEND_URL = "http://127.0.0.1:8000";
+
 const AVAILABLE_LIBS = [
   { id: "io", label: "io" },
   { id: "math", label: "math" },
@@ -134,7 +136,7 @@ export default function App() {
     }
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/sintactico", {
+      const response = await fetch(`${BACKEND_URL}/api/sintactico`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ expression: source }),

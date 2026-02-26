@@ -77,6 +77,7 @@ def main():
         if backend_server:
             backend_server.shutdown()
             backend_server.server_close()
+            backend_server.thread.join(timeout=5)
         # Cierra el dev server al salir
         if react_proc and react_proc.poll() is None:
             react_proc.terminate()

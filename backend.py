@@ -76,7 +76,7 @@ class Parser:
 
     def parse(self):
         node = self.expr()
-        if self.token_actual.type not in (TokenType.Fin,):
+        if self.token_actual.type != TokenType.Fin:
             raise ValueError(f"Token inesperado: {self.token_actual.value}")
         return node
 
@@ -167,4 +167,5 @@ def start_backend_server(host="127.0.0.1", port=8000):
     server = ThreadingHTTPServer((host, port), BackendHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    server.thread = thread
     return server
