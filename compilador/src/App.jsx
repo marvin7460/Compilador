@@ -127,9 +127,27 @@ export default function App() {
   };
 
   // ====== Compilador (solo UI por ahora) ======
-  const runStage = (stage) => {
-    // Aquí después harás fetch a tu backend Python.
-    setOutput((prev) => prev + `\n[Compilador] Ejecutar: ${stage}\n` + `(pendiente conectar backend)\n`);
+  const runStage = async (stage) => {
+    if (stage !== "Análisis Sintáctico") {
+      setOutput((prev) => prev + `\n[Compilador] Ejecutar: ${stage}\n` + `(pendiente conectar backend)\n`);
+      return;
+    }
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/api/sintactico", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expression: source }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setOutput((prev) => prev + `\n[Compilador] Error Sintáctico: ${data.error}\n`);
+        return;
+      }
+      setOutput((prev) => prev + `\n[Compilador] Árbol Sintáctico\n${data.tree}\n`);
+    } catch (error) {
+      setOutput((prev) => prev + `\n[Compilador] Error de conexión backend: ${error.message}\n`);
+    }
   };
 
   return (
