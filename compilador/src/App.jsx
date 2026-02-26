@@ -17,8 +17,8 @@ const TYPES = [
   { id: "bool", label: "bool", requiredLib: "io" },
 ];
 
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+function downloadText(filename, text, mimeType = "text/plain;charset=utf-8") {
+  const blob = new Blob([text], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -36,8 +36,13 @@ function insertAtCursor(textarea, insertText) {
   return { next, newCursor };
 }
 
+function ensureTsFilename(filename) {
+  return filename.toLowerCase().endsWith(".ts") ? filename : `${filename}.ts`;
+}
+
 export default function App() {
   const [source, setSource] = useState("");
+  const [currentFilename, setCurrentFilename] = useState("programa.ts");
   const [output, setOutput] = useState(
     "Salida: aquí se mostrarán resultados de Léxico/Sintáctico/Semántico/Código intermedio.\n"
   );
@@ -61,13 +66,15 @@ export default function App() {
     if (!file) return;
     const text = await file.text();
     setSource(text);
+    setCurrentFilename(ensureTsFilename(file.name));
     setOutput((prev) => prev + `\n[Archivo] Abierto: ${file.name}\n`);
     e.target.value = ""; // permite volver a abrir el mismo archivo
   };
 
   const onSaveClick = () => {
-    downloadText("programa.ts", source);
-    setOutput((prev) => prev + "\n[Archivo] Guardado: programa.ts\n");
+    const filename = ensureTsFilename(currentFilename);
+    downloadText(filename, source, "application/typescript;charset=utf-8");
+    setOutput((prev) => prev + `\n[Archivo] Guardado: ${filename}\n`);
   };
 
   const onClearClick = () => {
