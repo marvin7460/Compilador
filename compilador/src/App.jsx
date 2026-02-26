@@ -36,6 +36,10 @@ function insertAtCursor(textarea, insertText) {
   return { next, newCursor };
 }
 
+function ensureTsFilename(filename) {
+  return filename.toLowerCase().endsWith(".ts") ? filename : `${filename}.ts`;
+}
+
 export default function App() {
   const [source, setSource] = useState("");
   const [currentFilename, setCurrentFilename] = useState("programa.ts");
@@ -62,16 +66,14 @@ export default function App() {
     if (!file) return;
     const text = await file.text();
     setSource(text);
-    setCurrentFilename(file.name.toLowerCase().endsWith(".ts") ? file.name : `${file.name}.ts`);
+    setCurrentFilename(ensureTsFilename(file.name));
     setOutput((prev) => prev + `\n[Archivo] Abierto: ${file.name}\n`);
     e.target.value = ""; // permite volver a abrir el mismo archivo
   };
 
   const onSaveClick = () => {
-    const filename = currentFilename.toLowerCase().endsWith(".ts")
-      ? currentFilename
-      : `${currentFilename}.ts`;
-    downloadText(filename, source, "text/typescript;charset=utf-8");
+    const filename = ensureTsFilename(currentFilename);
+    downloadText(filename, source, "application/typescript;charset=utf-8");
     setOutput((prev) => prev + `\n[Archivo] Guardado: ${filename}\n`);
   };
 
