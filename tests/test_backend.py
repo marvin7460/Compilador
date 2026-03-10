@@ -94,7 +94,7 @@ class CompilationPipelineTests(unittest.TestCase):
 
         compiled = self.pipeline.run(source, stage="compile")
         self.assertFalse(compiled["diagnostics"])
-        self.assertIn("hola", compiled["execution"])
+        self.assertEqual(compiled["execution"], ["hola"])
 
 
 if __name__ == "__main__":
