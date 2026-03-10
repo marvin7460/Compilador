@@ -74,10 +74,11 @@ UI en `/compilador` con:
 - Botones por etapa: léxico, sintáctico, semántico, compilar.
 - Paneles:
   - Fuente
-  - Tokenización
-  - NASM
-  - Errores
-  - Terminal/logs
+  - Terminal de compilación (tokens, AST, NASM)
+  - Terminal de ejecución
+  - Terminal de errores/advertencias
+  - Logs
+- Botón **Abrir webviewer** con fallback embebido si no hay soporte.
 
 ## Instalación y ejecución
 
@@ -105,6 +106,13 @@ npm run lint
 npm run build
 ```
 
+Pruebas backend:
+
+```bash
+cd /home/runner/work/Compilador/Compilador
+python -m pytest -q
+```
+
 ## Flujo de compilación
 
 1. Tokenización (`Lexer`)
@@ -119,3 +127,29 @@ npm run build
 - Convención de llamadas NASM simplificada (educativa).
 - Manejo de `string` en NASM es básico.
 
+## Ejemplos válidos del lenguaje
+
+```ts
+var juan = 4;
+var nombre = "Juan";
+var x = 1;
+x = 2;
+```
+
+```ts
+function suma(a, b) { return a + b; }
+var r = suma(2, 3);
+```
+
+```ts
+// Flujo tipo burbuja (3 valores)
+var a = 3;
+var b = 1;
+var c = 2;
+var i = 0;
+while (i < 2) {
+  if (a > b) { var t1 = a; a = b; b = t1; }
+  if (b > c) { var t2 = b; b = c; c = t2; }
+  i = i + 1;
+}
+```

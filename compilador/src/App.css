@@ -83,7 +83,7 @@ button {
   min-height: 0;
   display: grid;
   grid-template-columns: 1.5fr 1fr;
-  grid-template-rows: 1fr 1fr 1fr;
+  grid-template-rows: 1fr;
   gap: 10px;
 }
 
@@ -99,7 +99,7 @@ button {
 }
 
 .editorPane {
-  grid-row: span 3;
+  grid-row: span 1;
 }
 
 .tabs {
@@ -157,5 +157,10 @@ button {
 }
 
 .panelWide {
-  grid-column: span 2;
+  grid-column: span 1;
+}
+
+.outputTabs {
+  border-bottom: 1px solid var(--border);
+  padding: 8px;
 }
