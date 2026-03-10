@@ -10,7 +10,7 @@ Proyecto de compilador educativo con:
 | Requisito | Estado | Evidencia | Acción |
 |---|---|---|---|
 | Lexer con línea/columna | Sí | `/backend.py` (`Lexer`, `Token`, `Diagnostic`) | Mantener y extender tokens según lenguaje |
-| Parser AST (funciones, return, while, for, break/continue, bloque global) | Sí | `/backend.py` (`Parser`, `Node`) | Mejorar recuperación de errores |
+| Parser AST (funciones, return, if/while/for, break/continue, bloque global) | Sí | `/backend.py` (`Parser`, `Node`) | Mejorar recuperación de errores |
 | Semántica (variables, tipos, funciones, retorno, break/continue) | Sí (básico) | `/backend.py` (`SemanticAnalyzer`) | Agregar coerciones/promoción de tipos si se requiere |
 | Generación NASM | Sí (subset mínimo) | `/backend.py` (`NasmCodeGenerator`) | Ampliar soporte de tipos/calling convention |
 | Pipeline por etapas | Sí | `/backend.py` (`CompilationPipeline`) | Añadir IR intermedio opcional |
@@ -29,13 +29,14 @@ Proyecto de compilador educativo con:
   - `FunctionDeclaration`
   - `FunctionCall`
   - `ReturnStatement`
+  - `IfStatement`
   - `WhileStatement`
   - `ForStatement`
   - `BreakStatement`
   - `ContinueStatement`
   - `GlobalProgramBlock`
 - `SemanticAnalyzer`: valida:
-  - uso de variables declaradas,
+  - uso de variables declaradas (`let` tipado y `var` con inferencia),
   - redeclaraciones,
   - compatibilidad de tipos,
   - firmas de función (cantidad/tipo de argumentos),
@@ -76,8 +77,11 @@ UI en `/compilador` con:
   - Fuente
   - Tokenización
   - NASM
-  - Errores
-  - Terminal/logs
+  - Terminales por pestañas:
+    - Compilación
+    - Ejecución
+    - Errores / warnings
+- Adaptador `webviewer` desacoplado (`/compilador/src/webviewer.js`) con fallback embebido si no hay integración disponible.
 
 ## Instalación y ejecución
 
@@ -105,6 +109,24 @@ npm run lint
 npm run build
 ```
 
+### Pruebas backend
+
+```bash
+cd /home/runner/work/Compilador/Compilador
+python -m unittest discover -s tests -v
+```
+
+## Ejemplos válidos del lenguaje
+
+```ts
+var juan = 4;
+var nombre = "Juan";
+var x = 1; x = 2;
+
+function suma(a, b) { return a + b; }
+var r = suma(2, 3);
+```
+
 ## Flujo de compilación
 
 1. Tokenización (`Lexer`)
@@ -118,4 +140,3 @@ npm run build
 - No hay optimización ni IR intermedio separado.
 - Convención de llamadas NASM simplificada (educativa).
 - Manejo de `string` en NASM es básico.
-

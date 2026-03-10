@@ -8,7 +8,10 @@ from typing import Any, Dict, List, Optional
 KEYWORDS = {
     "function",
     "let",
+    "var",
     "return",
+    "if",
+    "else",
     "while",
     "for",
     "break",
@@ -267,7 +270,7 @@ class Parser:
         while not self._is_at_end():
             if self._previous().lexeme == ";":
                 return
-            if self._current().lexeme in {"function", "let", "return", "while", "for", "break", "continue"}:
+            if self._current().lexeme in {"function", "let", "var", "return", "if", "while", "for", "break", "continue"}:
                 return
             self._advance()
 
@@ -308,12 +311,13 @@ class Parser:
         if not self._check("PUNCTUATION", ")"):
             while True:
                 param_name = self._consume("IDENTIFIER", "Se esperaba nombre de parámetro")
-                self._consume("PUNCTUATION", "Se esperaba ':' después del parámetro", ":")
-                param_type = self._consume("TYPE", "Se esperaba tipo de parámetro")
+                param_type = "any"
+                if self._match("PUNCTUATION", ":"):
+                    param_type = self._consume("TYPE", "Se esperaba tipo de parámetro").lexeme
                 params.append(
                     {
                         "name": param_name.lexeme,
-                        "type": param_type.lexeme,
+                        "type": param_type,
                         "line": param_name.line,
                         "column": param_name.column,
                     }
@@ -322,7 +326,7 @@ class Parser:
                     break
         self._consume("PUNCTUATION", "Se esperaba ')'", ")")
 
-        return_type = "void"
+        return_type = "any"
         if self._match("PUNCTUATION", ":"):
             token = self._consume("TYPE", "Se esperaba tipo de retorno")
             return_type = token.lexeme
@@ -356,10 +360,12 @@ class Parser:
 
     def _statement(self) -> Optional[Node]:
         try:
-            if self._match("KEYWORD", "let"):
+            if self._match("KEYWORD", "let") or self._match("KEYWORD", "var"):
                 return self._variable_declaration()
             if self._match("KEYWORD", "return"):
                 return self._return_statement()
+            if self._match("KEYWORD", "if"):
+                return self._if_statement()
             if self._match("KEYWORD", "while"):
                 return self._while_statement()
             if self._match("KEYWORD", "for"):
@@ -381,19 +387,57 @@ class Parser:
             return None
 
     def _variable_declaration(self) -> Node:
-        let_token = self._previous()
+        decl_token = self._previous()
         name = self._consume("IDENTIFIER", "Se esperaba identificador")
-        self._consume("PUNCTUATION", "Se esperaba ':' en declaración", ":")
-        type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+        var_type = "any"
+        if self._match("PUNCTUATION", ":"):
+            type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+            var_type = type_token.lexeme
+        elif decl_token.lexeme == "let":
+            self.diagnostics.append(
+                Diagnostic(
+                    stage="syntax",
+                    type="SyntaxError",
+                    message="Se esperaba ':' y tipo en declaración 'let' (sugerencia: use 'var nombre = valor;' para inferencia)",
+                    line=decl_token.line,
+                    column=decl_token.column,
+                )
+            )
         initializer = None
         if self._match("OPERATOR", "="):
             initializer = self._expression()
+        if decl_token.lexeme == "var" and var_type == "any" and initializer is None:
+            self.diagnostics.append(
+                Diagnostic(
+                    stage="syntax",
+                    type="SyntaxError",
+                    message="Una declaración 'var' requiere inicializador o tipo explícito",
+                    line=decl_token.line,
+                    column=decl_token.column,
+                )
+            )
         self._consume("PUNCTUATION", "Se esperaba ';' al final de declaración", ";")
         return Node(
             kind="VariableDeclaration",
-            line=let_token.line,
-            column=let_token.column,
-            data={"name": name.lexeme, "varType": type_token.lexeme, "initializer": initializer},
+            line=decl_token.line,
+            column=decl_token.column,
+            data={"name": name.lexeme, "varType": var_type, "initializer": initializer},
+        )
+
+    def _if_statement(self) -> Node:
+        token = self._previous()
+        self._consume("PUNCTUATION", "Se esperaba '(' después de if", "(")
+        condition = self._expression()
+        self._consume("PUNCTUATION", "Se esperaba ')' después de condición if", ")")
+        then_branch = self._statement()
+        else_branch = None
+        if self._match("KEYWORD", "else"):
+            else_branch = self._statement()
+        return Node(
+            kind="IfStatement",
+            line=token.line,
+            column=token.column,
+            data={"condition": condition, "thenBranch": then_branch, "elseBranch": else_branch},
         )
 
     def _return_statement(self) -> Node:
@@ -417,7 +461,7 @@ class Parser:
         self._consume("PUNCTUATION", "Se esperaba '(' después de for", "(")
 
         initializer = None
-        if self._match("KEYWORD", "let"):
+        if self._match("KEYWORD", "let") or self._match("KEYWORD", "var"):
             initializer = self._variable_declaration_for()
         elif not self._check("PUNCTUATION", ";"):
             initializer = self._assignment_or_expression()
@@ -444,19 +488,41 @@ class Parser:
         )
 
     def _variable_declaration_for(self) -> Node:
-        let_token = self._previous()
+        decl_token = self._previous()
         name = self._consume("IDENTIFIER", "Se esperaba identificador")
-        self._consume("PUNCTUATION", "Se esperaba ':' en declaración", ":")
-        type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+        var_type = "any"
+        if self._match("PUNCTUATION", ":"):
+            type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+            var_type = type_token.lexeme
+        elif decl_token.lexeme == "let":
+            self.diagnostics.append(
+                Diagnostic(
+                    stage="syntax",
+                    type="SyntaxError",
+                    message="Se esperaba ':' y tipo en declaración 'let' (sugerencia: use 'var nombre = valor;' para inferencia)",
+                    line=decl_token.line,
+                    column=decl_token.column,
+                )
+            )
         initializer = None
         if self._match("OPERATOR", "="):
             initializer = self._expression()
+        if decl_token.lexeme == "var" and var_type == "any" and initializer is None:
+            self.diagnostics.append(
+                Diagnostic(
+                    stage="syntax",
+                    type="SyntaxError",
+                    message="Una declaración 'var' requiere inicializador o tipo explícito",
+                    line=decl_token.line,
+                    column=decl_token.column,
+                )
+            )
         self._consume("PUNCTUATION", "Se esperaba ';' en inicializador de for", ";")
         return Node(
             kind="VariableDeclaration",
-            line=let_token.line,
-            column=let_token.column,
-            data={"name": name.lexeme, "varType": type_token.lexeme, "initializer": initializer},
+            line=decl_token.line,
+            column=decl_token.column,
+            data={"name": name.lexeme, "varType": var_type, "initializer": initializer},
         )
 
     def _expression_or_assignment_statement(self) -> Node:
@@ -633,7 +699,7 @@ class SemanticAnalyzer:
             }
 
         global_scope = Scope()
-        self._analyze_block(program.data["globalBlock"], global_scope, current_fn=None, loop_depth=0)
+        self._analyze_block(program.data["globalBlock"], global_scope, current_fn=None, loop_depth=0, create_scope=False)
 
         for fn in functions:
             fn_scope = Scope(global_scope)
@@ -643,7 +709,7 @@ class SemanticAnalyzer:
                         Diagnostic("semantic", "SemanticError", f"Parámetro redeclarado: {p['name']}", p["line"], p["column"])
                     )
             has_return = self._analyze_block(fn.data["body"], fn_scope, current_fn=fn, loop_depth=0)
-            if fn.data["returnType"] != "void" and not has_return:
+            if fn.data["returnType"] not in {"void", "any"} and not has_return:
                 self.diagnostics.append(
                     Diagnostic(
                         "semantic",
@@ -656,8 +722,15 @@ class SemanticAnalyzer:
 
         return self.diagnostics
 
-    def _analyze_block(self, block: Node, scope: Scope, current_fn: Optional[Node], loop_depth: int) -> bool:
-        local_scope = Scope(scope)
+    def _analyze_block(
+        self,
+        block: Node,
+        scope: Scope,
+        current_fn: Optional[Node],
+        loop_depth: int,
+        create_scope: bool = True,
+    ) -> bool:
+        local_scope = Scope(scope) if create_scope else scope
         has_return = False
         for stmt in block.data["statements"]:
             stmt_return = self._analyze_statement(stmt, local_scope, current_fn, loop_depth)
@@ -667,18 +740,22 @@ class SemanticAnalyzer:
     def _analyze_statement(self, stmt: Node, scope: Scope, current_fn: Optional[Node], loop_depth: int) -> bool:
         kind = stmt.kind
         if kind == "VariableDeclaration":
-            if not scope.define(stmt.data["name"], stmt.data["varType"]):
+            initializer = stmt.data.get("initializer")
+            inferred_type = self._infer_expr_type(initializer, scope) if initializer else None
+            declared_type = stmt.data["varType"]
+            resolved_type = inferred_type or declared_type
+
+            if not scope.define(stmt.data["name"], resolved_type):
                 self.diagnostics.append(
                     Diagnostic("semantic", "SemanticError", f"Variable redeclarada: {stmt.data['name']}", stmt.line, stmt.column)
                 )
-            if stmt.data.get("initializer"):
-                expr_type = self._infer_expr_type(stmt.data["initializer"], scope)
-                if expr_type and expr_type != stmt.data["varType"]:
+            if initializer and declared_type != "any":
+                if inferred_type and inferred_type != declared_type:
                     self.diagnostics.append(
                         Diagnostic(
                             "semantic",
                             "SemanticError",
-                            f"Tipo incompatible: se esperaba {stmt.data['varType']} y se recibió {expr_type}",
+                            f"Tipo incompatible: se esperaba {declared_type} y se recibió {inferred_type}",
                             stmt.line,
                             stmt.column,
                         )
@@ -701,7 +778,7 @@ class SemanticAnalyzer:
                 self.diagnostics.append(
                     Diagnostic("semantic", "SemanticError", "Una función void no debe retornar valor", stmt.line, stmt.column)
                 )
-            elif fn_return != "void":
+            elif fn_return != "void" and fn_return != "any":
                 if value is None:
                     self.diagnostics.append(
                         Diagnostic("semantic", "SemanticError", f"Se esperaba retorno de tipo {fn_return}", stmt.line, stmt.column)
@@ -718,7 +795,22 @@ class SemanticAnalyzer:
                                 stmt.column,
                             )
                         )
+            elif fn_return == "any" and value is not None:
+                self._infer_expr_type(value, scope)
             return True
+
+        if kind == "IfStatement":
+            cond_type = self._infer_expr_type(stmt.data["condition"], scope)
+            if cond_type and cond_type != "bool":
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "La condición de if debe ser bool", stmt.line, stmt.column)
+                )
+            then_has_return = self._analyze_statement(stmt.data["thenBranch"], Scope(scope), current_fn, loop_depth)
+            else_branch = stmt.data.get("elseBranch")
+            else_has_return = False
+            if else_branch:
+                else_has_return = self._analyze_statement(else_branch, Scope(scope), current_fn, loop_depth)
+            return then_has_return and else_has_return
 
         if kind == "BlockStatement":
             return self._analyze_block(stmt, scope, current_fn, loop_depth)
@@ -774,18 +866,30 @@ class SemanticAnalyzer:
             typ = scope.resolve(expr.data["name"])
             if not typ:
                 self.diagnostics.append(
-                    Diagnostic("semantic", "SemanticError", f"Variable no declarada: {expr.data['name']}", expr.line, expr.column)
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"Variable no declarada: {expr.data['name']} (sugerencia: declare la variable con let/var antes de usarla)",
+                        expr.line,
+                        expr.column,
+                    )
                 )
             return typ
         if expr.kind == "AssignmentExpression":
             target_type = scope.resolve(expr.data["name"])
             if not target_type:
                 self.diagnostics.append(
-                    Diagnostic("semantic", "SemanticError", f"Variable no declarada: {expr.data['name']}", expr.line, expr.column)
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"Variable no declarada: {expr.data['name']} (sugerencia: declare la variable con let/var antes de asignar)",
+                        expr.line,
+                        expr.column,
+                    )
                 )
                 return None
             value_type = self._infer_expr_type(expr.data["value"], scope)
-            if value_type and value_type != target_type:
+            if value_type and target_type != "any" and value_type != target_type:
                 self.diagnostics.append(
                     Diagnostic(
                         "semantic",
@@ -808,6 +912,8 @@ class SemanticAnalyzer:
             right = self._infer_expr_type(expr.data["right"], scope)
             op = expr.data["operator"]
             if op in {"+", "-", "*", "/"}:
+                if left == "any" or right == "any":
+                    return "any"
                 if left not in {"int", "float"} or right not in {"int", "float"}:
                     self.diagnostics.append(
                         Diagnostic("semantic", "SemanticError", f"Operación '{op}' requiere operandos numéricos", expr.line, expr.column)
@@ -817,7 +923,7 @@ class SemanticAnalyzer:
                     return "float"
                 return "int"
             if op in {"==", "!=", "<", ">", "<=", ">="}:
-                if left != right:
+                if left != right and left != "any" and right != "any":
                     self.diagnostics.append(
                         Diagnostic("semantic", "SemanticError", "Comparación entre tipos incompatibles", expr.line, expr.column)
                     )
@@ -826,7 +932,13 @@ class SemanticAnalyzer:
             signature = self.functions.get(expr.data["name"])
             if not signature:
                 self.diagnostics.append(
-                    Diagnostic("semantic", "SemanticError", f"Función no declarada: {expr.data['name']}", expr.line, expr.column)
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"Función no declarada: {expr.data['name']} (sugerencia: defina la función antes de invocarla)",
+                        expr.line,
+                        expr.column,
+                    )
                 )
                 return None
             expected = signature["params"]
@@ -836,14 +948,14 @@ class SemanticAnalyzer:
                     Diagnostic(
                         "semantic",
                         "SemanticError",
-                        f"La función '{expr.data['name']}' esperaba {len(expected)} argumentos y recibió {len(actual)}",
+                        f"La función '{expr.data['name']}' esperaba {len(expected)} argumentos y recibió {len(actual)} (sugerencia: revise la firma)",
                         expr.line,
                         expr.column,
                     )
                 )
             for idx, arg in enumerate(actual):
                 arg_type = self._infer_expr_type(arg, scope)
-                if idx < len(expected) and arg_type and arg_type != expected[idx]:
+                if idx < len(expected) and expected[idx] != "any" and arg_type and arg_type != expected[idx]:
                     self.diagnostics.append(
                         Diagnostic(
                             "semantic",
@@ -952,6 +1064,20 @@ class NasmCodeGenerator:
 
         if kind == "BlockStatement":
             self._emit_block(stmt, scope_name)
+            return
+
+        if kind == "IfStatement":
+            else_label = self._new_label("if_else")
+            end_label = self._new_label("if_end")
+            self._emit_expression(stmt.data["condition"], scope_name)
+            self.lines.append("  cmp eax, 0")
+            self.lines.append(f"  je {else_label}")
+            self._emit_statement(stmt.data["thenBranch"], scope_name)
+            self.lines.append(f"  jmp {end_label}")
+            self.lines.append(f"{else_label}:")
+            if stmt.data.get("elseBranch"):
+                self._emit_statement(stmt.data["elseBranch"], scope_name)
+            self.lines.append(f"{end_label}:")
             return
 
         if kind == "WhileStatement":

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import "./App.css";
+import { openExecutionView, sendExecutionOutput } from "./webviewer";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 const STAGES = [
@@ -42,9 +43,12 @@ export default function App() {
   const [activeTabId, setActiveTabId] = useState(1);
   const [tokensPanel, setTokensPanel] = useState("Sin análisis léxico.");
   const [nasmPanel, setNasmPanel] = useState("Sin compilación.");
-  const [terminal, setTerminal] = useState("Terminal lista.\n");
-  const [errorPanel, setErrorPanel] = useState("Sin errores.\n");
+  const [compileTerminal, setCompileTerminal] = useState("Terminal de compilación lista.\n");
+  const [executionTerminal, setExecutionTerminal] = useState("Sin ejecución.\n");
+  const [errorTerminal, setErrorTerminal] = useState("Sin errores.\n");
+  const [activeTerminalTab, setActiveTerminalTab] = useState("compile");
   const fileInputRef = useRef(null);
+  const executionViewRef = useRef(null);
   const tabIdCounterRef = useRef(INITIAL_TABS.length + 1);
 
   const activeTab = useMemo(
@@ -56,8 +60,13 @@ export default function App() {
     setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content } : t)));
   };
 
-  const appendTerminal = (message) => {
-    setTerminal((prev) => `${prev}${message}\n`);
+  const appendCompileTerminal = (message) => {
+    setCompileTerminal((prev) => `${prev}${message}\n`);
+  };
+
+  const appendExecutionTerminal = (message) => {
+    setExecutionTerminal((prev) => `${prev}${message}\n`);
+    sendExecutionOutput(executionViewRef.current, message);
   };
 
   const onOpenClick = () => fileInputRef.current?.click();
@@ -75,7 +84,7 @@ export default function App() {
     );
     setTabs((prev) => [...prev, ...opened]);
     setActiveTabId(opened[opened.length - 1].id);
-    appendTerminal(`[Archivo] ${opened.length} archivo(s) abierto(s).`);
+    appendCompileTerminal(`[Archivo] ${opened.length} archivo(s) abierto(s).`);
     e.target.value = "";
   };
 
@@ -83,7 +92,7 @@ export default function App() {
     if (!activeTab) return;
     const filename = ensureTsFilename(activeTab.name);
     downloadText(filename, activeTab.content, "application/typescript;charset=utf-8");
-    appendTerminal(`[Archivo] Guardado/descargado: ${filename}`);
+    appendCompileTerminal(`[Archivo] Guardado/descargado: ${filename}`);
   };
 
   const onDownloadClick = () => {
@@ -93,7 +102,7 @@ export default function App() {
   const onCloseTab = (id) => {
     setTabs((prev) => {
       if (prev.length === 1) {
-        appendTerminal("[Archivo] No se puede cerrar la última pestaña.");
+        appendCompileTerminal("[Archivo] No se puede cerrar la última pestaña.");
         return prev;
       }
       const filtered = prev.filter((t) => t.id !== id);
@@ -110,12 +119,13 @@ export default function App() {
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
-    appendTerminal(`[Archivo] Nueva pestaña: ${newTab.name}`);
+    appendCompileTerminal(`[Archivo] Nueva pestaña: ${newTab.name}`);
   };
 
   const runStage = async (stage) => {
     if (!activeTab) return;
-    appendTerminal(`[Compilador] Ejecutando etapa: ${stage.label}`);
+    appendCompileTerminal(`[Compilador] Ejecutando etapa: ${stage.label}`);
+    setActiveTerminalTab("compile");
 
     try {
       const response = await fetch(`${BACKEND_URL}${stage.path}`, {
@@ -129,18 +139,32 @@ export default function App() {
       if (typeof data.nasm === "string") setNasmPanel(data.nasm || "Sin NASM generado.");
 
       const diagnostics = data.diagnostics ?? [];
-      setErrorPanel(formatDiagnostics(diagnostics));
+      setErrorTerminal(formatDiagnostics(diagnostics));
 
       if (!response.ok) {
-        appendTerminal(`[Compilador] Etapa ${stage.label}: finalizada con errores.`);
+        appendCompileTerminal(`[Compilador] Etapa ${stage.label}: finalizada con errores.`);
+        if (stage.id === "compile") {
+          appendExecutionTerminal("[Ejecución] No disponible por errores de compilación.");
+        }
+        setActiveTerminalTab("errors");
       } else {
-        appendTerminal(`[Compilador] Etapa ${stage.label}: OK.`);
+        appendCompileTerminal(`[Compilador] Etapa ${stage.label}: OK.`);
+        if (stage.id === "compile") {
+          appendExecutionTerminal("[Ejecución] Compilación completada sin errores.");
+          setActiveTerminalTab("execution");
+        }
       }
     } catch (error) {
       const msg = `[Compilador] Error de conexión backend: ${error.message}`;
-      setErrorPanel(msg);
-      appendTerminal(msg);
+      setErrorTerminal(msg);
+      appendCompileTerminal(msg);
+      setActiveTerminalTab("errors");
     }
+  };
+
+  const onOpenExecutionView = () => {
+    executionViewRef.current = openExecutionView();
+    appendCompileTerminal("[UI] Vista de ejecución abierta (webviewer/ventana o fallback embebido).");
   };
 
   const onCloseFile = () => {
@@ -170,6 +194,7 @@ export default function App() {
           <div className="menuGroup">
             <div className="menuTitle">Análisis</div>
             <div className="menuItems">
+              <button onClick={onOpenExecutionView}>Abrir ejecución</button>
               {STAGES.map((stage) => (
                 <button key={stage.id} onClick={() => runStage(stage)}>
                   {stage.label}
@@ -230,14 +255,34 @@ export default function App() {
           <pre className="output">{nasmPanel}</pre>
         </section>
 
-        <section className="panel">
-          <div className="paneTitle">Errores</div>
-          <pre className="output">{errorPanel}</pre>
-        </section>
-
         <section className="panel panelWide">
-          <div className="paneTitle">Terminal / Logs</div>
-          <pre className="output">{terminal}</pre>
+          <div className="tabs terminalTabs">
+            <button
+              className={`tab ${activeTerminalTab === "compile" ? "active" : ""}`}
+              onClick={() => setActiveTerminalTab("compile")}
+            >
+              Compilación
+            </button>
+            <button
+              className={`tab ${activeTerminalTab === "execution" ? "active" : ""}`}
+              onClick={() => setActiveTerminalTab("execution")}
+            >
+              Ejecución
+            </button>
+            <button
+              className={`tab ${activeTerminalTab === "errors" ? "active" : ""}`}
+              onClick={() => setActiveTerminalTab("errors")}
+            >
+              Errores / Warnings
+            </button>
+          </div>
+          <pre className="output">
+            {activeTerminalTab === "compile"
+              ? compileTerminal
+              : activeTerminalTab === "execution"
+                ? executionTerminal
+                : errorTerminal}
+          </pre>
         </section>
       </main>
     </div>

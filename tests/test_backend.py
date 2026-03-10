@@ -35,6 +35,72 @@ class CompilationPipelineTests(unittest.TestCase):
         self.assertIn("_start:", result["nasm"])
         self.assertIn("call fn_main", result["nasm"])
 
+    def test_var_declaration_without_type_is_valid(self):
+        result = self.pipeline.run("var juan = 4;", stage="compile")
+        self.assertEqual([], result["diagnostics"])
+
+    def test_var_string_declaration_is_valid(self):
+        result = self.pipeline.run('var nombre = "Juan";', stage="compile")
+        self.assertEqual([], result["diagnostics"])
+
+    def test_var_reassignment_is_valid(self):
+        result = self.pipeline.run("var x = 1; x = 2;", stage="compile")
+        self.assertEqual([], result["diagnostics"])
+
+    def test_untyped_function_declaration_and_call(self):
+        source = """
+        function suma(a, b) { return a + b; }
+        var r = suma(2, 3);
+        """
+        result = self.pipeline.run(source, stage="compile")
+        self.assertEqual([], result["diagnostics"])
+
+    def test_untyped_function_wrong_argument_count(self):
+        source = """
+        function suma(a, b) { return a + b; }
+        var r = suma(2);
+        """
+        result = self.pipeline.run(source, stage="compile")
+        self.assertTrue(any("esperaba 2 argumentos" in d["message"] for d in result["diagnostics"]))
+
+    def test_reports_undefined_variable_inside_function(self):
+        source = """
+        function demo() { return x + 1; }
+        var r = demo();
+        """
+        result = self.pipeline.run(source, stage="semantic")
+        self.assertTrue(any("Variable no declarada: x" in d["message"] for d in result["diagnostics"]))
+
+    def test_bubble_sort_program_compiles_without_errors(self):
+        source = """
+        var a = 5;
+        var b = 1;
+        var c = 3;
+
+        function bubble3(): void {
+            var i = 0;
+            while (i < 2) {
+                if (a > b) {
+                    var t = a;
+                    a = b;
+                    b = t;
+                }
+                if (b > c) {
+                    var t2 = b;
+                    b = c;
+                    c = t2;
+                }
+                i = i + 1;
+            }
+        }
+
+        bubble3();
+        """
+        result = self.pipeline.run(source, stage="compile")
+        self.assertEqual([], result["diagnostics"])
+        self.assertIn("fn_bubble3", result["nasm"])
+        self.assertIn("call fn_bubble3", result["nasm"])
+
 
 if __name__ == "__main__":
     unittest.main()
