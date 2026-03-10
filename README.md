@@ -74,10 +74,10 @@ UI en `/compilador` con:
 - Botones por etapa: léxico, sintáctico, semántico, compilar.
 - Paneles:
   - Fuente
-  - Terminal de compilación (tokens, AST, NASM)
+  - Terminal de tokens
   - Terminal de ejecución
-  - Terminal de errores/advertencias
-  - Logs
+  - Terminal de ensamblador
+  - Terminal de logs de proceso
 - Botón **Abrir webviewer** con fallback embebido si no hay soporte.
 
 ## Instalación y ejecución
@@ -119,6 +119,31 @@ python -m pytest -q
 2. Parsing (`Parser`) -> AST
 3. Análisis semántico (`SemanticAnalyzer`)
 4. Generación NASM (`NasmCodeGenerator`) si no hay errores
+5. Ejecución interpretada (`ExecutionEngine`) para mostrar salida en terminal de ejecución (incluye `console.log(...)`)
+
+### Flujo de paneles en frontend
+
+Cada ejecución de una etapa refresca de forma independiente:
+
+- **Tokens**: salida de `tokens`.
+- **Ejecución**: salida de `execution` (ejemplo: `console.log("hola")`).
+- **Ensamblador**: salida de `nasm`.
+- **Logs de proceso**: pasos del pipeline (`processLogs`) y diagnósticos con línea/columna.
+
+## Prueba manual mínima
+
+1. Iniciar backend y frontend.
+2. Ingresar:
+
+```ts
+console.log("hola");
+```
+
+3. Presionar **Compilar** y verificar:
+   - Tokens: aparecen `console`, `.`, `log`, `(`, `"hola"`, `)`, `;`.
+   - Ejecución: aparece `hola`.
+   - Ensamblador: se genera NASM.
+   - Logs de proceso: aparecen pasos exitosos y estado final.
 
 ## Limitaciones actuales del lenguaje
 

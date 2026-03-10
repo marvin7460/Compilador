@@ -26,33 +26,37 @@ function ensureTsFilename(filename) {
   return filename.toLowerCase().endsWith(".ts") ? filename : `${filename}.ts`;
 }
 
-function formatDiagnostics(diagnostics) {
-  if (!diagnostics?.length) return "Sin errores.";
-  return diagnostics
-    .map((d) => `[${d.stage}] ${d.type} L${d.line}:C${d.column} - ${d.message}`)
-    .join("\n");
-}
-
 function formatTokens(tokens) {
   if (!tokens?.length) return "Sin tokens.";
   return tokens.map((t) => `${t.type}(${t.lexeme}) @ ${t.line}:${t.column}`).join("\n");
 }
 
-function formatCompileConsole(tokensPanel, astPanel, nasmPanel) {
-  return `${tokensPanel}\n\nAST:\n${astPanel}\n\nNASM:\n${nasmPanel}`;
+function formatExecution(execution) {
+  if (!execution?.length) return "Sin salida de ejecución.";
+  return execution.join("\n");
+}
+
+function formatProcessLogs(processLogs, diagnostics) {
+  const logs = [...(processLogs ?? [])];
+  if (diagnostics?.length) {
+    logs.push("Diagnósticos:");
+    logs.push(...diagnostics.map((d) => `[${d.stage}] ${d.type} L${d.line}:C${d.column} - ${d.message}`));
+  } else {
+    logs.push("Sin diagnósticos.");
+  }
+  return logs.join("\n");
 }
 
 export default function App() {
   const [tabs, setTabs] = useState(INITIAL_TABS);
   const [activeTabId, setActiveTabId] = useState(1);
   const [tokensPanel, setTokensPanel] = useState("Sin análisis léxico.");
-  const [nasmPanel, setNasmPanel] = useState("Sin compilación.");
-  const [terminal, setTerminal] = useState("Terminal lista.\n");
+  const [nasmPanel, setNasmPanel] = useState("Sin ensamblador generado.");
   const [executionPanel, setExecutionPanel] = useState("Sin ejecución.\n");
-  const [errorPanel, setErrorPanel] = useState("Sin errores.\n");
-  const [astPanel, setAstPanel] = useState("AST no generado.");
-  const [outputTab, setOutputTab] = useState("compile");
+  const [logsPanel, setLogsPanel] = useState("Logs de proceso listos.");
   const fileInputRef = useRef(null);
+  const editorRef = useRef(null);
+  const lineNumbersRef = useRef(null);
   const tabIdCounterRef = useRef(INITIAL_TABS.length + 1);
 
   const activeTab = useMemo(
@@ -62,10 +66,6 @@ export default function App() {
 
   const setActiveContent = (content) => {
     setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content } : t)));
-  };
-
-  const appendTerminal = (message) => {
-    setTerminal((prev) => `${prev}${message}\n`);
   };
 
   const appendExecution = (message) => {
@@ -88,7 +88,7 @@ export default function App() {
     );
     setTabs((prev) => [...prev, ...opened]);
     setActiveTabId(opened[opened.length - 1].id);
-    appendTerminal(`[Archivo] ${opened.length} archivo(s) abierto(s).`);
+    setLogsPanel((prev) => `${prev}\n[Archivo] ${opened.length} archivo(s) abierto(s).`);
     e.target.value = "";
   };
 
@@ -96,7 +96,7 @@ export default function App() {
     if (!activeTab) return;
     const filename = ensureTsFilename(activeTab.name);
     downloadText(filename, activeTab.content, "application/typescript;charset=utf-8");
-    appendTerminal(`[Archivo] Guardado/descargado: ${filename}`);
+    setLogsPanel((prev) => `${prev}\n[Archivo] Guardado/descargado: ${filename}`);
   };
 
   const onDownloadClick = () => {
@@ -105,10 +105,10 @@ export default function App() {
 
   const onCloseTab = (id) => {
     setTabs((prev) => {
-      if (prev.length === 1) {
-        appendTerminal("[Archivo] No se puede cerrar la última pestaña.");
-        return prev;
-      }
+        if (prev.length === 1) {
+          setLogsPanel((current) => `${current}\n[Archivo] No se puede cerrar la última pestaña.`);
+          return prev;
+        }
       const filtered = prev.filter((t) => t.id !== id);
       if (id === activeTabId) setActiveTabId(filtered[0].id);
       return filtered;
@@ -123,12 +123,15 @@ export default function App() {
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
-    appendTerminal(`[Archivo] Nueva pestaña: ${newTab.name}`);
+    setLogsPanel((prev) => `${prev}\n[Archivo] Nueva pestaña: ${newTab.name}`);
   };
 
   const runStage = async (stage) => {
     if (!activeTab) return;
-    appendTerminal(`[Compilador] Ejecutando etapa: ${stage.label}`);
+    setTokensPanel("Procesando tokens...");
+    setNasmPanel("Procesando ensamblador...");
+    setExecutionPanel("Procesando ejecución...");
+    setLogsPanel(`[Compilador] Ejecutando etapa: ${stage.label}`);
 
     try {
       const response = await fetch(`${BACKEND_URL}${stage.path}`, {
@@ -137,28 +140,21 @@ export default function App() {
         body: JSON.stringify({ source: activeTab.content }),
       });
       const data = await response.json();
-
-      if (data.tokens) setTokensPanel(formatTokens(data.tokens));
-      if (typeof data.nasm === "string") setNasmPanel(data.nasm || "Sin NASM generado.");
-      if (data.ast) setAstPanel(JSON.stringify(data.ast, null, 2));
-
+      setTokensPanel(formatTokens(data.tokens));
+      if (typeof data.nasm === "string") setNasmPanel(data.nasm || "Sin ensamblador generado.");
+      setExecutionPanel(formatExecution(data.execution));
       const diagnostics = data.diagnostics ?? [];
-      setErrorPanel(formatDiagnostics(diagnostics));
+      setLogsPanel(formatProcessLogs(data.processLogs, diagnostics));
 
       if (!response.ok) {
-        appendTerminal(`[Compilador] Etapa ${stage.label}: finalizada con errores.`);
-        appendExecution(`[Ejecución] Detenida en etapa ${stage.label}.`);
+        setLogsPanel((prev) => `${prev}\n[Compilador] Etapa ${stage.label}: finalizada con errores.`);
       } else {
-        appendTerminal(`[Compilador] Etapa ${stage.label}: OK.`);
-        if (stage.id === "compile") {
-          appendExecution("[Ejecución] Compilación completada. Revise NASM para ejecución externa.");
-        }
+        setLogsPanel((prev) => `${prev}\n[Compilador] Etapa ${stage.label}: OK.`);
       }
     } catch (error) {
       const msg = `[Compilador] Error de conexión backend: ${error.message}`;
-      setErrorPanel(msg);
-      appendTerminal(msg);
-      appendExecution("[Ejecución] Falló la comunicación con backend.");
+      setLogsPanel(msg);
+      setExecutionPanel("[Ejecución] Falló la comunicación con backend.");
     }
   };
 
@@ -172,14 +168,19 @@ export default function App() {
     if (status.supported) {
       appendExecution("[Webviewer] Vista de ejecución abierta.");
     } else if (status.error) {
-      appendTerminal(`[Webviewer] ${status.error}`);
+      setLogsPanel((prev) => `${prev}\n[Webviewer] ${status.error}`);
     }
   };
 
-  const compileConsole = useMemo(
-    () => formatCompileConsole(tokensPanel, astPanel, nasmPanel),
-    [tokensPanel, astPanel, nasmPanel]
-  );
+  const lineNumbers = useMemo(() => {
+    const lineCount = (activeTab?.content ?? "").split("\n").length;
+    return Array.from({ length: lineCount || 1 }, (_, i) => i + 1).join("\n");
+  }, [activeTab?.content]);
+
+  const onEditorScroll = () => {
+    if (!editorRef.current || !lineNumbersRef.current) return;
+    lineNumbersRef.current.scrollTop = editorRef.current.scrollTop;
+  };
 
   return (
     <div className="app">
@@ -245,36 +246,39 @@ export default function App() {
               </button>
             ))}
           </div>
-          <textarea
-            className="editor"
-            value={activeTab?.content ?? ""}
-            onChange={(e) => setActiveContent(e.target.value)}
-            placeholder="Escribe tu código aquí..."
-            spellCheck={false}
-          />
+          <div className="editorWrapper">
+            <pre ref={lineNumbersRef} className="lineNumbers">
+              {lineNumbers}
+            </pre>
+            <textarea
+              ref={editorRef}
+              className="editor"
+              value={activeTab?.content ?? ""}
+              onChange={(e) => setActiveContent(e.target.value)}
+              onScroll={onEditorScroll}
+              placeholder="Escribe tu código aquí..."
+              spellCheck={false}
+            />
+          </div>
         </section>
 
-        <section className="panel panelWide">
-          <div className="tabs outputTabs">
-            <button className={`tab ${outputTab === "compile" ? "active" : ""}`} onClick={() => setOutputTab("compile")}>
-              Consola compilación
-            </button>
-            <button className={`tab ${outputTab === "run" ? "active" : ""}`} onClick={() => setOutputTab("run")}>
-              Salida ejecución
-            </button>
-            <button className={`tab ${outputTab === "errors" ? "active" : ""}`} onClick={() => setOutputTab("errors")}>
-              Errores/advertencias
-            </button>
-            <button className={`tab ${outputTab === "logs" ? "active" : ""}`} onClick={() => setOutputTab("logs")}>
-              Logs
-            </button>
-          </div>
-          <pre className="output">
-            {outputTab === "compile" && compileConsole}
-            {outputTab === "run" && executionPanel}
-            {outputTab === "errors" && errorPanel}
-            {outputTab === "logs" && terminal}
-          </pre>
+        <section className="panelsGrid">
+          <article className="panel">
+            <div className="paneTitle">Tokens</div>
+            <pre className="output">{tokensPanel}</pre>
+          </article>
+          <article className="panel">
+            <div className="paneTitle">Ejecución</div>
+            <pre className="output">{executionPanel}</pre>
+          </article>
+          <article className="panel">
+            <div className="paneTitle">Ensamblador</div>
+            <pre className="output">{nasmPanel}</pre>
+          </article>
+          <article className="panel">
+            <div className="paneTitle">Logs de Proceso</div>
+            <pre className="output">{logsPanel}</pre>
+          </article>
         </section>
       </main>
     </div>

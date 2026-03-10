@@ -156,11 +156,34 @@ button {
   padding: 10px;
 }
 
-.panelWide {
-  grid-column: span 1;
+.editorWrapper {
+  display: grid;
+  grid-template-columns: 52px 1fr;
+  min-height: 0;
 }
 
-.outputTabs {
-  border-bottom: 1px solid var(--border);
-  padding: 8px;
+.lineNumbers {
+  margin: 0;
+  padding: 10px 8px 10px 10px;
+  text-align: right;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  user-select: none;
+  font-size: 12px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.panelsGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  min-height: 0;
+}
+
+.panelsGrid .panel .output {
+  white-space: pre-wrap;
 }
