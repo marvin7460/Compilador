@@ -124,6 +124,10 @@ button {
   cursor: pointer;
 }
 
+.terminalTabs {
+  border-bottom: 1px solid var(--border);
+}
+
 .paneTitle {
   border-bottom: 1px solid var(--border);
   color: var(--muted);
