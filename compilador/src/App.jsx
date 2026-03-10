@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import "./App.css";
+import { openExecutionView, sendOutputToExecutionView } from "./webviewer";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 const STAGES = [
@@ -37,13 +38,20 @@ function formatTokens(tokens) {
   return tokens.map((t) => `${t.type}(${t.lexeme}) @ ${t.line}:${t.column}`).join("\n");
 }
 
+function formatCompileConsole(tokensPanel, astPanel, nasmPanel) {
+  return `${tokensPanel}\n\nAST:\n${astPanel}\n\nNASM:\n${nasmPanel}`;
+}
+
 export default function App() {
   const [tabs, setTabs] = useState(INITIAL_TABS);
   const [activeTabId, setActiveTabId] = useState(1);
   const [tokensPanel, setTokensPanel] = useState("Sin análisis léxico.");
   const [nasmPanel, setNasmPanel] = useState("Sin compilación.");
   const [terminal, setTerminal] = useState("Terminal lista.\n");
+  const [executionPanel, setExecutionPanel] = useState("Sin ejecución.\n");
   const [errorPanel, setErrorPanel] = useState("Sin errores.\n");
+  const [astPanel, setAstPanel] = useState("AST no generado.");
+  const [outputTab, setOutputTab] = useState("compile");
   const fileInputRef = useRef(null);
   const tabIdCounterRef = useRef(INITIAL_TABS.length + 1);
 
@@ -58,6 +66,11 @@ export default function App() {
 
   const appendTerminal = (message) => {
     setTerminal((prev) => `${prev}${message}\n`);
+  };
+
+  const appendExecution = (message) => {
+    setExecutionPanel((prev) => `${prev}${message}\n`);
+    sendOutputToExecutionView(message);
   };
 
   const onOpenClick = () => fileInputRef.current?.click();
@@ -127,19 +140,25 @@ export default function App() {
 
       if (data.tokens) setTokensPanel(formatTokens(data.tokens));
       if (typeof data.nasm === "string") setNasmPanel(data.nasm || "Sin NASM generado.");
+      if (data.ast) setAstPanel(JSON.stringify(data.ast, null, 2));
 
       const diagnostics = data.diagnostics ?? [];
       setErrorPanel(formatDiagnostics(diagnostics));
 
       if (!response.ok) {
         appendTerminal(`[Compilador] Etapa ${stage.label}: finalizada con errores.`);
+        appendExecution(`[Ejecución] Detenida en etapa ${stage.label}.`);
       } else {
         appendTerminal(`[Compilador] Etapa ${stage.label}: OK.`);
+        if (stage.id === "compile") {
+          appendExecution("[Ejecución] Compilación completada. Revise NASM para ejecución externa.");
+        }
       }
     } catch (error) {
       const msg = `[Compilador] Error de conexión backend: ${error.message}`;
       setErrorPanel(msg);
       appendTerminal(msg);
+      appendExecution("[Ejecución] Falló la comunicación con backend.");
     }
   };
 
@@ -147,6 +166,20 @@ export default function App() {
     if (!activeTab) return;
     onCloseTab(activeTab.id);
   };
+
+  const onOpenWebviewer = () => {
+    const status = openExecutionView();
+    if (status.supported) {
+      appendExecution("[Webviewer] Vista de ejecución abierta.");
+    } else if (status.error) {
+      appendTerminal(`[Webviewer] ${status.error}`);
+    }
+  };
+
+  const compileConsole = useMemo(
+    () => formatCompileConsole(tokensPanel, astPanel, nasmPanel),
+    [tokensPanel, astPanel, nasmPanel]
+  );
 
   return (
     <div className="app">
@@ -175,6 +208,7 @@ export default function App() {
                   {stage.label}
                 </button>
               ))}
+              <button onClick={onOpenWebviewer}>Abrir webviewer</button>
             </div>
           </div>
         </nav>
@@ -220,24 +254,27 @@ export default function App() {
           />
         </section>
 
-        <section className="panel">
-          <div className="paneTitle">Tokenización</div>
-          <pre className="output">{tokensPanel}</pre>
-        </section>
-
-        <section className="panel">
-          <div className="paneTitle">NASM</div>
-          <pre className="output">{nasmPanel}</pre>
-        </section>
-
-        <section className="panel">
-          <div className="paneTitle">Errores</div>
-          <pre className="output">{errorPanel}</pre>
-        </section>
-
         <section className="panel panelWide">
-          <div className="paneTitle">Terminal / Logs</div>
-          <pre className="output">{terminal}</pre>
+          <div className="tabs outputTabs">
+            <button className={`tab ${outputTab === "compile" ? "active" : ""}`} onClick={() => setOutputTab("compile")}>
+              Consola compilación
+            </button>
+            <button className={`tab ${outputTab === "run" ? "active" : ""}`} onClick={() => setOutputTab("run")}>
+              Salida ejecución
+            </button>
+            <button className={`tab ${outputTab === "errors" ? "active" : ""}`} onClick={() => setOutputTab("errors")}>
+              Errores/advertencias
+            </button>
+            <button className={`tab ${outputTab === "logs" ? "active" : ""}`} onClick={() => setOutputTab("logs")}>
+              Logs
+            </button>
+          </div>
+          <pre className="output">
+            {outputTab === "compile" && compileConsole}
+            {outputTab === "run" && executionPanel}
+            {outputTab === "errors" && errorPanel}
+            {outputTab === "logs" && terminal}
+          </pre>
         </section>
       </main>
     </div>
