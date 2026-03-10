@@ -4,13 +4,16 @@
   --panel2: #0b1224;
   --text: #e5e7eb;
   --muted: #9ca3af;
-  --accent: #60a5fa;
-  --border: rgba(255,255,255,0.10);
+  --border: rgba(255, 255, 255, 0.12);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
@@ -26,33 +29,37 @@ html, body, #root {
 
 .topbar {
   border-bottom: 1px solid var(--border);
-  padding: 14px 16px;
-  background: linear-gradient(180deg, rgba(96,165,250,0.10), transparent);
+  padding: 12px;
 }
 
-.title .h1 { font-size: 20px; font-weight: 700; }
-.title .h2 { font-size: 14px; color: var(--muted); margin-top: 2px; }
-.title .h3 { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.title .h1 {
+  font-weight: 700;
+  font-size: 20px;
+}
+
+.title .h2 {
+  color: var(--muted);
+  font-size: 13px;
+}
 
 .menu {
-  margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .menuGroup {
-  padding: 10px;
-  background: rgba(255,255,255,0.03);
   border: 1px solid var(--border);
   border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .menuTitle {
+  color: var(--muted);
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
   margin-bottom: 8px;
 }
 
@@ -62,102 +69,93 @@ html, body, #root {
   flex-wrap: wrap;
 }
 
-button, select {
+button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: var(--panel2);
   color: var(--text);
-  border: 1px solid var(--border);
-  padding: 8px 10px;
-  border-radius: 8px;
   cursor: pointer;
-  font-size: 13px;
-}
-
-button:hover, select:hover {
-  border-color: rgba(96,165,250,0.6);
+  padding: 6px 10px;
 }
 
 .main {
-  display: grid;
-  grid-template-columns: 1.6fr 1fr;
-  gap: 12px;
   padding: 12px;
   min-height: 0;
+  display: grid;
+  grid-template-columns: 1.5fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  gap: 10px;
 }
 
-.editorPane, .sidePane {
+.editorPane,
+.panel {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
-  background: rgba(255,255,255,0.03);
+  background: rgba(255, 255, 255, 0.03);
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;
 }
 
+.editorPane {
+  grid-row: span 3;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab.active {
+  border-color: #60a5fa;
+}
+
+.tabClose {
+  cursor: pointer;
+}
+
 .paneTitle {
-  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   font-size: 12px;
+  padding: 8px 10px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+}
+
+.editor,
+.output {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .editor {
-  width: 100%;
-  height: 100%;
+  padding: 10px;
   resize: none;
-  border: 0;
   outline: none;
-  padding: 12px;
-  color: var(--text);
-  background: transparent;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.sidePane {
-  grid-template-rows: auto auto 1fr;
-}
-
-.chips {
-  padding: 10px 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
-  min-height: 58px;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  background: rgba(96,165,250,0.10);
-  border-radius: 999px;
-  font-size: 12px;
-}
-
-.chipClose {
-  padding: 2px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  cursor: pointer;
-  font-size: 12px;
 }
 
 .output {
-  margin: 0;
-  padding: 12px;
   overflow: auto;
-  background: transparent;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  padding: 10px;
 }
 
-.muted { color: var(--muted); }
+.panelWide {
+  grid-column: span 2;
+}

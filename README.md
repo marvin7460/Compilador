@@ -1,93 +1,121 @@
-# Compilador (UI React + Vite) + App de escritorio (PyWebView)
+# Compilador (Python + React)
 
-Este repositorio contiene una interfaz construida con **React + Vite** (carpeta `compilador/`) y un launcher en **Python** (`run_app.py`) que inicia el servidor de desarrollo y lo muestra en una ventana de escritorio usando **pywebview**.
+Proyecto de compilador educativo con:
 
-## Estructura del proyecto
+- **Backend Python (POO)** para análisis léxico/sintáctico/semántico y generación NASM.
+- **Frontend React** para editor multi-pestaña, paneles de resultados y terminal de salida.
 
-- `run_app.py`: inicia el dev server y abre la app en una ventana con WebView.
-- `compilador/`: proyecto frontend (React + Vite).
-  - `package.json`: scripts `dev`, `build`, `preview`, `lint`
-  - `src/`: código fuente (por ejemplo `main.jsx`, `App.jsx`)
-  - `public/`: assets estáticos
+## Estado actual y cobertura de requisitos
 
-## Requisitos
+| Requisito | Estado | Evidencia | Acción |
+|---|---|---|---|
+| Lexer con línea/columna | Sí | `/backend.py` (`Lexer`, `Token`, `Diagnostic`) | Mantener y extender tokens según lenguaje |
+| Parser AST (funciones, return, while, for, break/continue, bloque global) | Sí | `/backend.py` (`Parser`, `Node`) | Mejorar recuperación de errores |
+| Semántica (variables, tipos, funciones, retorno, break/continue) | Sí (básico) | `/backend.py` (`SemanticAnalyzer`) | Agregar coerciones/promoción de tipos si se requiere |
+| Generación NASM | Sí (subset mínimo) | `/backend.py` (`NasmCodeGenerator`) | Ampliar soporte de tipos/calling convention |
+| Pipeline por etapas | Sí | `/backend.py` (`CompilationPipeline`) | Añadir IR intermedio opcional |
+| API por etapa | Sí | `/backend.py` (`BackendHandler`) | Integrar autenticación/versión API si aplica |
+| Editor multi-pestaña | Sí | `/compilador/src/App.jsx` | Persistencia de sesión opcional |
+| Abrir/guardar/descargar/cerrar archivo | Sí | `/compilador/src/App.jsx` | Guardado local avanzado opcional |
+| Paneles fuente/tokens/NASM/errores/terminal | Sí | `/compilador/src/App.jsx` | Añadir panel AST opcional |
+| Flujo con bloque global tipo main implícito | Sí | `/backend.py` (`Program.globalBlock`, `NasmCodeGenerator`) | Mantener regla documentada |
 
-### Para ejecutar el frontend (modo web)
-- **Bun** (recomendado, porque `run_app.py` ejecuta `bun dev`)
-  - Alternativa: Node.js + npm (ver nota abajo)
+## Arquitectura
 
-### Para ejecutar como app de escritorio
-- **Python 3.10+** (recomendado)
-- Paquete **pywebview**
-- (Windows) WebView2 suele ser el backend más común para pywebview.
+### Backend
 
-## Instalación
+- `Lexer`: tokeniza el código y reporta diagnósticos léxicos con posición.
+- `Parser`: construye AST con nodos:
+  - `FunctionDeclaration`
+  - `FunctionCall`
+  - `ReturnStatement`
+  - `WhileStatement`
+  - `ForStatement`
+  - `BreakStatement`
+  - `ContinueStatement`
+  - `GlobalProgramBlock`
+- `SemanticAnalyzer`: valida:
+  - uso de variables declaradas,
+  - redeclaraciones,
+  - compatibilidad de tipos,
+  - firmas de función (cantidad/tipo de argumentos),
+  - tipo de retorno,
+  - contexto válido de `break` / `continue`.
+- `NasmCodeGenerator`: traduce el AST a NASM para el subset soportado.
+- `CompilationPipeline`: orquesta etapas (`lexical`, `syntax`, `semantic`, `compile`).
+- `Diagnostic`: formato unificado de error.
 
-### 1) Instalar dependencias del frontend
+### Regla de punto de entrada (`main` explícito + bloque global)
 
-```bash
-cd compilador
-bun install
+1. Todo código fuera de funciones se ubica en un **bloque global ejecutable** (main implícito).
+2. En NASM, `_start` ejecuta:
+   - primero bloque global implícito,
+   - luego `main()` explícito si existe.
+
+## Endpoints backend
+
+- `POST /api/lexico`
+- `POST /api/sintactico`
+- `POST /api/semantico`
+- `POST /api/compile`
+
+Body:
+
+```json
+{ "source": "codigo..." }
 ```
 
-## Ejecutar (web)
+## Frontend
 
-Desde `compilador/`:
+UI en `/compilador` con:
 
-```bash
-bun dev
-```
+- Editor multi-pestaña.
+- Acciones: abrir, guardar, descargar, cerrar, nueva pestaña.
+- Botones por etapa: léxico, sintáctico, semántico, compilar.
+- Paneles:
+  - Fuente
+  - Tokenización
+  - NASM
+  - Errores
+  - Terminal/logs
 
-Luego abre en el navegador:
-- `http://127.0.0.1:5173`
+## Instalación y ejecución
 
-## Ejecutar (escritorio con PyWebView)
-
-1) Instala dependencias de Python:
-
-```bash
-pip install pywebview
-```
-
-2) Instala dependencias del frontend (si no lo hiciste):
+### Backend
 
 ```bash
-cd compilador
-bun install
-cd ..
+cd /home/runner/work/Compilador/Compilador
+python backend.py
 ```
 
-3) Ejecuta el launcher:
+> Alternativa recomendada para desarrollo de escritorio: `python run_app.py`
+
+### Frontend
 
 ```bash
-python run_app.py
+cd /home/runner/work/Compilador/Compilador/compilador
+npm install
+npm run dev
 ```
 
-Esto:
-- ejecuta `bun dev -- --host 127.0.0.1 --port 5173`
-- espera a que el servidor esté disponible
-- abre una ventana titulada **"Compiladores - Diseño Compilador"**
+Build/lint:
 
-## Scripts disponibles (frontend)
+```bash
+npm run lint
+npm run build
+```
 
-En `compilador/package.json`:
+## Flujo de compilación
 
-- `bun dev` → servidor de desarrollo (Vite)
-- `bun run build` → build de producción
-- `bun run preview` → previsualizar build
-- `bun run lint` → lint con ESLint
+1. Tokenización (`Lexer`)
+2. Parsing (`Parser`) -> AST
+3. Análisis semántico (`SemanticAnalyzer`)
+4. Generación NASM (`NasmCodeGenerator`) si no hay errores
 
-## Nota si NO usas Bun
+## Limitaciones actuales del lenguaje
 
-Actualmente `run_app.py` ejecuta `bun dev`.  
-Si prefieres npm, puedes:
-- cambiar `cmd = "bun dev -- --host 127.0.0.1 --port 5173"` por `cmd = "npm run dev -- --host 127.0.0.1 --port 5173"` en `run_app.py`, o
-- ejecutar el frontend manualmente con npm y abrir `http://127.0.0.1:5173`.
+- Subconjunto intencionalmente reducido (no hay clases/objetos).
+- No hay optimización ni IR intermedio separado.
+- Convención de llamadas NASM simplificada (educativa).
+- Manejo de `string` en NASM es básico.
 
-## Estado actual
-
-El README dentro de `compilador/` proviene del template de React+Vite. Este README (en la raíz) describe cómo correr el proyecto completo (web + desktop).
-
-## Licencia
-
-No especificada.

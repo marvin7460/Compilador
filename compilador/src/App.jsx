@@ -2,19 +2,11 @@ import { useMemo, useRef, useState } from "react";
 import "./App.css";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
-
-const AVAILABLE_LIBS = [
-  { id: "io", label: "io" },
-  { id: "math", label: "math" },
-  { id: "string", label: "string" },
-];
-
-const TYPES = [
-  // Puedes ajustar estos a tu lenguaje
-  { id: "int", label: "int", requiredLib: "math" },
-  { id: "float", label: "float", requiredLib: "math" },
-  { id: "string", label: "string", requiredLib: "string" },
-  { id: "bool", label: "bool", requiredLib: "io" },
+const STAGES = [
+  { id: "lexico", label: "Léxico", path: "/api/lexico" },
+  { id: "sintactico", label: "Sintáctico", path: "/api/sintactico" },
+  { id: "semantico", label: "Semántico", path: "/api/semantico" },
+  { id: "compile", label: "Compilar", path: "/api/compile" },
 ];
 
 function downloadText(filename, text, mimeType = "text/plain;charset=utf-8") {
@@ -27,145 +19,139 @@ function downloadText(filename, text, mimeType = "text/plain;charset=utf-8") {
   URL.revokeObjectURL(url);
 }
 
-function insertAtCursor(textarea, insertText) {
-  const start = textarea.selectionStart ?? 0;
-  const end = textarea.selectionEnd ?? 0;
-  const value = textarea.value ?? "";
-  const next = value.slice(0, start) + insertText + value.slice(end);
-  const newCursor = start + insertText.length;
-  return { next, newCursor };
-}
-
 function ensureTsFilename(filename) {
+  if (!filename) return "programa.ts";
   return filename.toLowerCase().endsWith(".ts") ? filename : `${filename}.ts`;
 }
 
+function formatDiagnostics(diagnostics) {
+  if (!diagnostics?.length) return "Sin errores.";
+  return diagnostics
+    .map((d) => `[${d.stage}] ${d.type} L${d.line}:C${d.column} - ${d.message}`)
+    .join("\n");
+}
+
+function formatTokens(tokens) {
+  if (!tokens?.length) return "Sin tokens.";
+  return tokens.map((t) => `${t.type}(${t.lexeme}) @ ${t.line}:${t.column}`).join("\n");
+}
+
 export default function App() {
-  const [source, setSource] = useState("");
-  const [currentFilename, setCurrentFilename] = useState("programa.ts");
-  const [output, setOutput] = useState(
-    "Salida: aquí se mostrarán resultados de Léxico/Sintáctico/Semántico/Código intermedio.\n"
-  );
-
-  const [activeLibs, setActiveLibs] = useState([]); // array de ids
-  const [selectedType, setSelectedType] = useState(TYPES[0].id);
-
+  const [tabs, setTabs] = useState([{ id: 1, name: "programa.ts", content: "" }]);
+  const [activeTabId, setActiveTabId] = useState(1);
+  const [tokensPanel, setTokensPanel] = useState("Sin análisis léxico.");
+  const [nasmPanel, setNasmPanel] = useState("Sin compilación.");
+  const [terminal, setTerminal] = useState("Terminal lista.\n");
+  const [errorPanel, setErrorPanel] = useState("Sin errores.\n");
   const fileInputRef = useRef(null);
-  const editorRef = useRef(null);
 
-  const selectedTypeObj = useMemo(
-    () => TYPES.find((t) => t.id === selectedType),
-    [selectedType]
+  const activeTab = useMemo(
+    () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
+    [tabs, activeTabId]
   );
 
-  // ====== Archivo ======
+  const setActiveContent = (content) => {
+    setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, content } : t)));
+  };
+
+  const appendTerminal = (message) => {
+    setTerminal((prev) => `${prev}${message}\n`);
+  };
+
   const onOpenClick = () => fileInputRef.current?.click();
 
   const onFileChosen = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    setSource(text);
-    setCurrentFilename(ensureTsFilename(file.name));
-    setOutput((prev) => prev + `\n[Archivo] Abierto: ${file.name}\n`);
-    e.target.value = ""; // permite volver a abrir el mismo archivo
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+
+    const opened = await Promise.all(
+      files.map(async (f) => ({
+        id: Date.now() + Math.random(),
+        name: ensureTsFilename(f.name),
+        content: await f.text(),
+      }))
+    );
+    setTabs((prev) => [...prev, ...opened]);
+    setActiveTabId(opened[opened.length - 1].id);
+    appendTerminal(`[Archivo] ${opened.length} archivo(s) abierto(s).`);
+    e.target.value = "";
   };
 
   const onSaveClick = () => {
-    const filename = ensureTsFilename(currentFilename);
-    downloadText(filename, source, "application/typescript;charset=utf-8");
-    setOutput((prev) => prev + `\n[Archivo] Guardado: ${filename}\n`);
+    if (!activeTab) return;
+    const filename = ensureTsFilename(activeTab.name);
+    downloadText(filename, activeTab.content, "application/typescript;charset=utf-8");
+    appendTerminal(`[Archivo] Guardado/descargado: ${filename}`);
   };
 
-  const onClearClick = () => {
-    setSource("");
-    setOutput((prev) => prev + "\n[Archivo] Pantalla limpiada\n");
+  const onDownloadClick = () => {
+    onSaveClick();
   };
 
-  const onCloseClick = () => {
-    // En web no se puede cerrar la pestaña de forma segura si no la abriste con script.
-    // Simulación: limpiar estado y mostrar mensaje.
-    setSource("");
-    setActiveLibs([]);
-    setOutput("Aplicación cerrada (simulado). Recarga la página para iniciar de nuevo.\n");
-  };
-
-  // ====== Ayuda -> Librerías ======
-  const addLibrary = (libId) => {
-    setActiveLibs((prev) => (prev.includes(libId) ? prev : [...prev, libId]));
-    setOutput((prev) => prev + `[Ayuda] Librería agregada: ${libId}\n`);
-  };
-
-  const removeLibrary = (libId) => {
-    setActiveLibs((prev) => prev.filter((x) => x !== libId));
-    setOutput((prev) => prev + `[Ayuda] Librería removida: ${libId}\n`);
-  };
-
-  // ====== Variable -> Tipo ======
-  const onTypeChange = (e) => {
-    const nextType = e.target.value;
-    setSelectedType(nextType);
-
-    const t = TYPES.find((x) => x.id === nextType);
-    if (t?.requiredLib) {
-      setActiveLibs((prev) => (prev.includes(t.requiredLib) ? prev : [...prev, t.requiredLib]));
-      setOutput((prev) => prev + `[Variable] Tipo: ${t.label} (activa lib: ${t.requiredLib})\n`);
-    } else {
-      setOutput((prev) => prev + `[Variable] Tipo: ${t?.label ?? nextType}\n`);
-    }
-  };
-
-  const insertVariableTemplate = () => {
-    const textarea = editorRef.current;
-    if (!textarea) return;
-
-    const varName = "miVar";
-    const typeLabel = selectedTypeObj?.label ?? selectedType;
-    const snippet = `let ${varName}: ${typeLabel};\n`;
-
-    const { next, newCursor } = insertAtCursor(textarea, snippet);
-    setSource(next);
-
-    // reposicionar cursor
-    requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.setSelectionRange(newCursor, newCursor);
+  const onCloseTab = (id) => {
+    setTabs((prev) => {
+      if (prev.length === 1) {
+        appendTerminal("[Archivo] No se puede cerrar la última pestaña.");
+        return prev;
+      }
+      const filtered = prev.filter((t) => t.id !== id);
+      if (id === activeTabId) setActiveTabId(filtered[0].id);
+      return filtered;
     });
-
-    setOutput((prev) => prev + `[Variable] Insertado: ${snippet}`);
   };
 
-  // ====== Compilador (solo UI por ahora) ======
+  const onNewTab = () => {
+    const newTab = {
+      id: Date.now() + Math.random(),
+      name: `nuevo_${tabs.length + 1}.ts`,
+      content: "",
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+    appendTerminal(`[Archivo] Nueva pestaña: ${newTab.name}`);
+  };
+
   const runStage = async (stage) => {
-    if (stage !== "Análisis Sintáctico") {
-      setOutput((prev) => prev + `\n[Compilador] Ejecutar: ${stage}\n` + `(pendiente conectar backend)\n`);
-      return;
-    }
+    if (!activeTab) return;
+    appendTerminal(`[Compilador] Ejecutando etapa: ${stage.label}`);
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/sintactico`, {
+      const response = await fetch(`${BACKEND_URL}${stage.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expression: source }),
+        body: JSON.stringify({ source: activeTab.content }),
       });
       const data = await response.json();
+
+      if (data.tokens) setTokensPanel(formatTokens(data.tokens));
+      if (typeof data.nasm === "string") setNasmPanel(data.nasm || "Sin NASM generado.");
+
+      const diagnostics = data.diagnostics ?? [];
+      setErrorPanel(formatDiagnostics(diagnostics));
+
       if (!response.ok) {
-        setOutput((prev) => prev + `\n[Compilador] Error Sintáctico: ${data.error}\n`);
-        return;
+        appendTerminal(`[Compilador] Etapa ${stage.label}: finalizada con errores.`);
+      } else {
+        appendTerminal(`[Compilador] Etapa ${stage.label}: OK.`);
       }
-      setOutput((prev) => prev + `\n[Compilador] Árbol Sintáctico\n${data.tree}\n`);
     } catch (error) {
-      setOutput((prev) => prev + `\n[Compilador] Error de conexión backend: ${error.message}\n`);
+      const msg = `[Compilador] Error de conexión backend: ${error.message}`;
+      setErrorPanel(msg);
+      appendTerminal(msg);
     }
+  };
+
+  const onCloseFile = () => {
+    if (!activeTab) return;
+    onCloseTab(activeTab.id);
   };
 
   return (
     <div className="app">
       <header className="topbar">
         <div className="title">
-          <div className="h1">Compiladores</div>
-          <div className="h2">Tema: Diseño Compilador — Actividad 1</div>
-          <div className="h3">Phd.MCC. Ramiro Lupercio Coronel</div>
+          <div className="h1">Compilador</div>
+          <div className="h2">Frontend React + backend Python</div>
         </div>
 
         <nav className="menu">
@@ -174,43 +160,19 @@ export default function App() {
             <div className="menuItems">
               <button onClick={onOpenClick}>Abrir</button>
               <button onClick={onSaveClick}>Guardar</button>
-              <button onClick={onClearClick}>Limpiar</button>
-              <button onClick={onCloseClick}>Cerrar</button>
+              <button onClick={onDownloadClick}>Descargar</button>
+              <button onClick={onCloseFile}>Cerrar</button>
+              <button onClick={onNewTab}>Nueva pestaña</button>
             </div>
           </div>
-
           <div className="menuGroup">
-            <div className="menuTitle">Compilador</div>
+            <div className="menuTitle">Análisis</div>
             <div className="menuItems">
-              <button onClick={() => runStage("Análisis Léxico")}>Léxico</button>
-              <button onClick={() => runStage("Análisis Sintáctico")}>Sintáctico</button>
-              <button onClick={() => runStage("Análisis Semántico")}>Semántico</button>
-              <button onClick={() => runStage("Código Intermedio")}>Código Intermedio</button>
-            </div>
-          </div>
-
-          <div className="menuGroup">
-            <div className="menuTitle">Ayuda</div>
-            <div className="menuItems">
-              {AVAILABLE_LIBS.map((lib) => (
-                <button key={lib.id} onClick={() => addLibrary(lib.id)}>
-                  + {lib.label}
+              {STAGES.map((stage) => (
+                <button key={stage.id} onClick={() => runStage(stage)}>
+                  {stage.label}
                 </button>
               ))}
-            </div>
-          </div>
-
-          <div className="menuGroup">
-            <div className="menuTitle">Variable</div>
-            <div className="menuItems">
-              <select value={selectedType} onChange={onTypeChange}>
-                {TYPES.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-              <button onClick={insertVariableTemplate}>Insertar</button>
             </div>
           </div>
         </nav>
@@ -218,6 +180,7 @@ export default function App() {
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept=".ts,.txt"
           onChange={onFileChosen}
           style={{ display: "none" }}
@@ -226,37 +189,54 @@ export default function App() {
 
       <main className="main">
         <section className="editorPane">
-          <div className="paneTitle">Editor</div>
+          <div className="tabs">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                className={`tab ${tab.id === activeTabId ? "active" : ""}`}
+                onClick={() => setActiveTabId(tab.id)}
+              >
+                {tab.name}
+                <span
+                  className="tabClose"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseTab(tab.id);
+                  }}
+                >
+                  ×
+                </span>
+              </button>
+            ))}
+          </div>
           <textarea
-            ref={editorRef}
             className="editor"
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
+            value={activeTab?.content ?? ""}
+            onChange={(e) => setActiveContent(e.target.value)}
             placeholder="Escribe tu código aquí..."
             spellCheck={false}
           />
         </section>
 
-        <aside className="sidePane">
-          <div className="paneTitle">Librerías en la interfaz</div>
-          <div className="chips">
-            {activeLibs.length === 0 ? (
-              <div className="muted">Ninguna</div>
-            ) : (
-              activeLibs.map((libId) => (
-                <div key={libId} className="chip">
-                  <span>{libId}</span>
-                  <button className="chipClose" onClick={() => removeLibrary(libId)}>
-                    x
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
+        <section className="panel">
+          <div className="paneTitle">Tokenización</div>
+          <pre className="output">{tokensPanel}</pre>
+        </section>
 
-          <div className="paneTitle">Salida</div>
-          <pre className="output">{output}</pre>
-        </aside>
+        <section className="panel">
+          <div className="paneTitle">NASM</div>
+          <pre className="output">{nasmPanel}</pre>
+        </section>
+
+        <section className="panel">
+          <div className="paneTitle">Errores</div>
+          <pre className="output">{errorPanel}</pre>
+        </section>
+
+        <section className="panel panelWide">
+          <div className="paneTitle">Terminal / Logs</div>
+          <pre className="output">{terminal}</pre>
+        </section>
       </main>
     </div>
   );

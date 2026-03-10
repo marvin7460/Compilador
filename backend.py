@@ -1,134 +1,1154 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from typing import Any, Dict, List, Optional
 
 
-class TokenType:
-    Numero = "Numero"
-    Suma = "Suma"
-    Resta = "Resta"
-    Multiplica = "Multiplica"
-    Divide = "Divide"
-    Fin = "Fin"
-    Invalido = "Invalido"
+KEYWORDS = {
+    "function",
+    "let",
+    "return",
+    "while",
+    "for",
+    "break",
+    "continue",
+    "true",
+    "false",
+}
+
+TYPE_KEYWORDS = {"int", "float", "string", "bool", "void"}
+
+
+@dataclass
+class Diagnostic:
+    stage: str
+    type: str
+    message: str
+    line: int
+    column: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "type": self.type,
+            "message": self.message,
+            "line": self.line,
+            "column": self.column,
+        }
 
 
 @dataclass
 class Token:
     type: str
-    value: str
+    lexeme: str
+    line: int
+    column: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "type": self.type,
+            "lexeme": self.lexeme,
+            "line": self.line,
+            "column": self.column,
+        }
 
 
 class Lexer:
-    def __init__(self, origen):
-        self.origen = origen
+    def __init__(self, source: str):
+        self.source = source
         self.index = 0
+        self.line = 1
+        self.column = 1
+        self.tokens: List[Token] = []
+        self.diagnostics: List[Diagnostic] = []
 
-    def next_token(self):
-        while self.index < len(self.origen) and self.origen[self.index].isspace():
-            self.index += 1
+    def _peek(self) -> str:
+        if self.index >= len(self.source):
+            return "\0"
+        return self.source[self.index]
 
-        if self.index >= len(self.origen):
-            return Token(TokenType.Fin, "")
+    def _peek_next(self) -> str:
+        nxt = self.index + 1
+        if nxt >= len(self.source):
+            return "\0"
+        return self.source[nxt]
 
-        entrada_actual = self.origen[self.index]
-        if entrada_actual.isdigit():
-            num = ""
-            while self.index < len(self.origen) and self.origen[self.index].isdigit():
-                num += self.origen[self.index]
-                self.index += 1
-            return Token(TokenType.Numero, num)
-
+    def _advance(self) -> str:
+        ch = self.source[self.index]
         self.index += 1
-        if entrada_actual == "+":
-            return Token(TokenType.Suma, "+")
-        if entrada_actual == "-":
-            return Token(TokenType.Resta, "-")
-        if entrada_actual == "*":
-            return Token(TokenType.Multiplica, "*")
-        if entrada_actual == "/":
-            return Token(TokenType.Divide, "/")
-        return Token(TokenType.Invalido, entrada_actual)
+        if ch == "\n":
+            self.line += 1
+            self.column = 1
+        else:
+            self.column += 1
+        return ch
+
+    def _add_token(self, token_type: str, lexeme: str, line: int, column: int):
+        self.tokens.append(Token(token_type, lexeme, line, column))
+
+    def tokenize(self) -> List[Token]:
+        while self.index < len(self.source):
+            ch = self._peek()
+            start_line, start_col = self.line, self.column
+
+            if ch in " \r\t":
+                self._advance()
+                continue
+            if ch == "\n":
+                self._advance()
+                continue
+
+            if ch == "/" and self._peek_next() == "/":
+                while self._peek() not in {"\n", "\0"}:
+                    self._advance()
+                continue
+
+            if ch.isalpha() or ch == "_":
+                ident = []
+                while self._peek().isalnum() or self._peek() == "_":
+                    ident.append(self._advance())
+                text = "".join(ident)
+                if text in KEYWORDS:
+                    self._add_token("KEYWORD", text, start_line, start_col)
+                elif text in TYPE_KEYWORDS:
+                    self._add_token("TYPE", text, start_line, start_col)
+                else:
+                    self._add_token("IDENTIFIER", text, start_line, start_col)
+                continue
+
+            if ch.isdigit():
+                num = []
+                seen_dot = False
+                while True:
+                    current = self._peek()
+                    if current.isdigit():
+                        num.append(self._advance())
+                        continue
+                    if current == "." and not seen_dot and self._peek_next().isdigit():
+                        seen_dot = True
+                        num.append(self._advance())
+                        continue
+                    break
+                text = "".join(num)
+                self._add_token("NUMBER", text, start_line, start_col)
+                continue
+
+            if ch == '"':
+                self._advance()
+                chars = []
+                escaped = False
+                while self._peek() != "\0":
+                    current = self._advance()
+                    if escaped:
+                        chars.append(current)
+                        escaped = False
+                        continue
+                    if current == "\\":
+                        escaped = True
+                        continue
+                    if current == '"':
+                        break
+                    chars.append(current)
+                if self.source[self.index - 1] != '"':
+                    self.diagnostics.append(
+                        Diagnostic(
+                            stage="lexical",
+                            type="LexicalError",
+                            message="Cadena sin cerrar",
+                            line=start_line,
+                            column=start_col,
+                        )
+                    )
+                else:
+                    self._add_token("STRING", "".join(chars), start_line, start_col)
+                continue
+
+            two_char_ops = {"==", "!=", "<=", ">="}
+            pair = ch + self._peek_next()
+            if pair in two_char_ops:
+                self._advance()
+                self._advance()
+                self._add_token("OPERATOR", pair, start_line, start_col)
+                continue
+
+            if ch in "+-*/=<>(){};,:!":
+                self._advance()
+                token_type = "OPERATOR" if ch in "+-*/=<>!" else "PUNCTUATION"
+                self._add_token(token_type, ch, start_line, start_col)
+                continue
+
+            self.diagnostics.append(
+                Diagnostic(
+                    stage="lexical",
+                    type="LexicalError",
+                    message=f"Carácter inválido: {ch}",
+                    line=start_line,
+                    column=start_col,
+                )
+            )
+            self._advance()
+
+        self.tokens.append(Token("EOF", "", self.line, self.column))
+        return self.tokens
 
 
-class TreeNode:
-    def __init__(self, token):
-        self.token = token
-        self.left = None
-        self.right = None
+@dataclass
+class Node:
+    kind: str
+    line: int
+    column: int
+    data: Dict[str, Any] = field(default_factory=dict)
 
-    def to_lines(self, level=0):
-        indent = " " * level
-        line = f"{indent}{self.token.type}: {self.token.value}"
-        lines = [line]
-        if self.left:
-            lines.extend(self.left.to_lines(level + 2))
-        if self.right:
-            lines.extend(self.right.to_lines(level + 2))
-        return lines
+    def to_dict(self) -> Dict[str, Any]:
+        result = {"kind": self.kind, "line": self.line, "column": self.column}
+        for k, v in self.data.items():
+            result[k] = self._value_to_dict(v)
+        return result
+
+    def _value_to_dict(self, value: Any) -> Any:
+        if isinstance(value, Node):
+            return value.to_dict()
+        if isinstance(value, list):
+            return [self._value_to_dict(item) for item in value]
+        return value
 
 
 class Parser:
-    def __init__(self, lexer):
-        self.lexer = lexer
-        self.token_actual = lexer.next_token()
+    def __init__(self, tokens: List[Token]):
+        self.tokens = tokens
+        self.index = 0
+        self.diagnostics: List[Diagnostic] = []
 
-    def parse(self):
-        node = self.expr()
-        if self.token_actual.type != TokenType.Fin:
-            raise ValueError(f"Token inesperado: {self.token_actual.value}")
-        return node
+    def _current(self) -> Token:
+        return self.tokens[self.index]
 
-    def expr(self):
-        node = self.termino()
-        while self.token_actual.type in (TokenType.Suma, TokenType.Resta):
-            token = self.token_actual
-            self.eat(token.type)
-            new_node = TreeNode(token)
-            new_node.left = node
-            new_node.right = self.termino()
-            node = new_node
-        return node
+    def _previous(self) -> Token:
+        return self.tokens[self.index - 1]
 
-    def termino(self):
-        node = self.factor()
-        while self.token_actual.type in (TokenType.Multiplica, TokenType.Divide):
-            token = self.token_actual
-            self.eat(token.type)
-            new_node = TreeNode(token)
-            new_node.left = node
-            new_node.right = self.factor()
-            node = new_node
-        return node
+    def _is_at_end(self) -> bool:
+        return self._current().type == "EOF"
 
-    def factor(self):
-        token = self.token_actual
-        if token.type == TokenType.Numero:
-            self.eat(TokenType.Numero)
-            return TreeNode(token)
-        if token.type == TokenType.Invalido:
-            raise ValueError(f"Token inválido: {token.value}")
-        raise ValueError(f"Se esperaba número y se recibió: {token.value}")
+    def _advance(self) -> Token:
+        if not self._is_at_end():
+            self.index += 1
+        return self._previous()
 
-    def eat(self, token_type):
-        if self.token_actual.type == token_type:
-            self.token_actual = self.lexer.next_token()
-            return
-        raise ValueError(
-            f"Se esperaba token {token_type} y se recibió {self.token_actual.type}"
+    def _check(self, token_type: str, lexeme: Optional[str] = None) -> bool:
+        token = self._current()
+        if token.type != token_type:
+            return False
+        return lexeme is None or token.lexeme == lexeme
+
+    def _match(self, token_type: str, lexeme: Optional[str] = None) -> bool:
+        if self._check(token_type, lexeme):
+            self._advance()
+            return True
+        return False
+
+    def _consume(self, token_type: str, message: str, lexeme: Optional[str] = None) -> Token:
+        if self._check(token_type, lexeme):
+            return self._advance()
+        token = self._current()
+        self.diagnostics.append(
+            Diagnostic(
+                stage="syntax",
+                type="SyntaxError",
+                message=message,
+                line=token.line,
+                column=token.column,
+            )
+        )
+        return token
+
+    def _synchronize(self):
+        while not self._is_at_end():
+            if self._previous().lexeme == ";":
+                return
+            if self._current().lexeme in {"function", "let", "return", "while", "for", "break", "continue"}:
+                return
+            self._advance()
+
+    def parse(self) -> Node:
+        functions = []
+        global_statements = []
+
+        while not self._is_at_end():
+            if self._check("KEYWORD", "function"):
+                node = self._function_declaration()
+                if node:
+                    functions.append(node)
+                continue
+            stmt = self._statement()
+            if stmt:
+                global_statements.append(stmt)
+
+        return Node(
+            kind="Program",
+            line=1,
+            column=1,
+            data={
+                "functions": functions,
+                "globalBlock": Node(
+                    kind="GlobalProgramBlock",
+                    line=1,
+                    column=1,
+                    data={"statements": global_statements},
+                ),
+            },
         )
 
+    def _function_declaration(self) -> Optional[Node]:
+        fn_token = self._consume("KEYWORD", "Se esperaba 'function'", "function")
+        name = self._consume("IDENTIFIER", "Se esperaba nombre de función")
+        self._consume("PUNCTUATION", "Se esperaba '('", "(")
+        params = []
+        if not self._check("PUNCTUATION", ")"):
+            while True:
+                param_name = self._consume("IDENTIFIER", "Se esperaba nombre de parámetro")
+                self._consume("PUNCTUATION", "Se esperaba ':' después del parámetro", ":")
+                param_type = self._consume("TYPE", "Se esperaba tipo de parámetro")
+                params.append(
+                    {
+                        "name": param_name.lexeme,
+                        "type": param_type.lexeme,
+                        "line": param_name.line,
+                        "column": param_name.column,
+                    }
+                )
+                if not self._match("PUNCTUATION", ","):
+                    break
+        self._consume("PUNCTUATION", "Se esperaba ')'", ")")
 
-def parse_expression(expression: str) -> str:
-    lexer = Lexer(expression)
-    parser = Parser(lexer)
-    tree = parser.parse()
-    return "\n".join(tree.to_lines())
+        return_type = "void"
+        if self._match("PUNCTUATION", ":"):
+            token = self._consume("TYPE", "Se esperaba tipo de retorno")
+            return_type = token.lexeme
+
+        body = self._block_statement()
+        if not body:
+            return None
+        return Node(
+            kind="FunctionDeclaration",
+            line=fn_token.line,
+            column=fn_token.column,
+            data={
+                "name": name.lexeme,
+                "params": params,
+                "returnType": return_type,
+                "body": body,
+            },
+        )
+
+    def _block_statement(self) -> Optional[Node]:
+        token = self._consume("PUNCTUATION", "Se esperaba '{' para iniciar bloque", "{")
+        start_line, start_col = token.line, token.column
+
+        statements = []
+        while not self._is_at_end() and not self._check("PUNCTUATION", "}"):
+            stmt = self._statement()
+            if stmt:
+                statements.append(stmt)
+        self._consume("PUNCTUATION", "Se esperaba '}' para cerrar bloque", "}")
+        return Node(kind="BlockStatement", line=start_line, column=start_col, data={"statements": statements})
+
+    def _statement(self) -> Optional[Node]:
+        try:
+            if self._match("KEYWORD", "let"):
+                return self._variable_declaration()
+            if self._match("KEYWORD", "return"):
+                return self._return_statement()
+            if self._match("KEYWORD", "while"):
+                return self._while_statement()
+            if self._match("KEYWORD", "for"):
+                return self._for_statement()
+            if self._match("KEYWORD", "break"):
+                token = self._previous()
+                self._consume("PUNCTUATION", "Se esperaba ';' después de break", ";")
+                return Node(kind="BreakStatement", line=token.line, column=token.column)
+            if self._match("KEYWORD", "continue"):
+                token = self._previous()
+                self._consume("PUNCTUATION", "Se esperaba ';' después de continue", ";")
+                return Node(kind="ContinueStatement", line=token.line, column=token.column)
+            if self._match("PUNCTUATION", "{"):
+                self.index -= 1
+                return self._block_statement()
+            return self._expression_or_assignment_statement()
+        except Exception:
+            self._synchronize()
+            return None
+
+    def _variable_declaration(self) -> Node:
+        let_token = self._previous()
+        name = self._consume("IDENTIFIER", "Se esperaba identificador")
+        self._consume("PUNCTUATION", "Se esperaba ':' en declaración", ":")
+        type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+        initializer = None
+        if self._match("OPERATOR", "="):
+            initializer = self._expression()
+        self._consume("PUNCTUATION", "Se esperaba ';' al final de declaración", ";")
+        return Node(
+            kind="VariableDeclaration",
+            line=let_token.line,
+            column=let_token.column,
+            data={"name": name.lexeme, "varType": type_token.lexeme, "initializer": initializer},
+        )
+
+    def _return_statement(self) -> Node:
+        token = self._previous()
+        value = None
+        if not self._check("PUNCTUATION", ";"):
+            value = self._expression()
+        self._consume("PUNCTUATION", "Se esperaba ';' después de return", ";")
+        return Node(kind="ReturnStatement", line=token.line, column=token.column, data={"value": value})
+
+    def _while_statement(self) -> Node:
+        token = self._previous()
+        self._consume("PUNCTUATION", "Se esperaba '(' después de while", "(")
+        condition = self._expression()
+        self._consume("PUNCTUATION", "Se esperaba ')' después de condición while", ")")
+        body = self._statement()
+        return Node(kind="WhileStatement", line=token.line, column=token.column, data={"condition": condition, "body": body})
+
+    def _for_statement(self) -> Node:
+        token = self._previous()
+        self._consume("PUNCTUATION", "Se esperaba '(' después de for", "(")
+
+        initializer = None
+        if self._match("KEYWORD", "let"):
+            initializer = self._variable_declaration_for()
+        elif not self._check("PUNCTUATION", ";"):
+            initializer = self._assignment_or_expression()
+            self._consume("PUNCTUATION", "Se esperaba ';' en for", ";")
+        else:
+            self._consume("PUNCTUATION", "Se esperaba ';' en for", ";")
+
+        condition = None
+        if not self._check("PUNCTUATION", ";"):
+            condition = self._expression()
+        self._consume("PUNCTUATION", "Se esperaba ';' en for", ";")
+
+        update = None
+        if not self._check("PUNCTUATION", ")"):
+            update = self._assignment_or_expression()
+        self._consume("PUNCTUATION", "Se esperaba ')' en for", ")")
+
+        body = self._statement()
+        return Node(
+            kind="ForStatement",
+            line=token.line,
+            column=token.column,
+            data={"initializer": initializer, "condition": condition, "update": update, "body": body},
+        )
+
+    def _variable_declaration_for(self) -> Node:
+        let_token = self._previous()
+        name = self._consume("IDENTIFIER", "Se esperaba identificador")
+        self._consume("PUNCTUATION", "Se esperaba ':' en declaración", ":")
+        type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+        initializer = None
+        if self._match("OPERATOR", "="):
+            initializer = self._expression()
+        self._consume("PUNCTUATION", "Se esperaba ';' en inicializador de for", ";")
+        return Node(
+            kind="VariableDeclaration",
+            line=let_token.line,
+            column=let_token.column,
+            data={"name": name.lexeme, "varType": type_token.lexeme, "initializer": initializer},
+        )
+
+    def _expression_or_assignment_statement(self) -> Node:
+        expr = self._assignment_or_expression()
+        self._consume("PUNCTUATION", "Se esperaba ';' al final de sentencia", ";")
+        return Node(kind="ExpressionStatement", line=expr.line, column=expr.column, data={"expression": expr})
+
+    def _assignment_or_expression(self) -> Node:
+        if self._check("IDENTIFIER") and self.index + 1 < len(self.tokens):
+            next_token = self.tokens[self.index + 1]
+            if next_token.type == "OPERATOR" and next_token.lexeme == "=":
+                name = self._advance()
+                equals = self._advance()
+                value = self._expression()
+                return Node(
+                    kind="AssignmentExpression",
+                    line=equals.line,
+                    column=equals.column,
+                    data={"name": name.lexeme, "value": value},
+                )
+        return self._expression()
+
+    def _expression(self) -> Node:
+        return self._equality()
+
+    def _equality(self) -> Node:
+        expr = self._comparison()
+        while self._match("OPERATOR", "==") or self._match("OPERATOR", "!="):
+            operator = self._previous()
+            right = self._comparison()
+            expr = Node(
+                kind="BinaryExpression",
+                line=operator.line,
+                column=operator.column,
+                data={"operator": operator.lexeme, "left": expr, "right": right},
+            )
+        return expr
+
+    def _comparison(self) -> Node:
+        expr = self._term()
+        while (
+            self._match("OPERATOR", "<")
+            or self._match("OPERATOR", ">")
+            or self._match("OPERATOR", "<=")
+            or self._match("OPERATOR", ">=")
+        ):
+            operator = self._previous()
+            right = self._term()
+            expr = Node(
+                kind="BinaryExpression",
+                line=operator.line,
+                column=operator.column,
+                data={"operator": operator.lexeme, "left": expr, "right": right},
+            )
+        return expr
+
+    def _term(self) -> Node:
+        expr = self._factor()
+        while self._match("OPERATOR", "+") or self._match("OPERATOR", "-"):
+            operator = self._previous()
+            right = self._factor()
+            expr = Node(
+                kind="BinaryExpression",
+                line=operator.line,
+                column=operator.column,
+                data={"operator": operator.lexeme, "left": expr, "right": right},
+            )
+        return expr
+
+    def _factor(self) -> Node:
+        expr = self._unary()
+        while self._match("OPERATOR", "*") or self._match("OPERATOR", "/"):
+            operator = self._previous()
+            right = self._unary()
+            expr = Node(
+                kind="BinaryExpression",
+                line=operator.line,
+                column=operator.column,
+                data={"operator": operator.lexeme, "left": expr, "right": right},
+            )
+        return expr
+
+    def _unary(self) -> Node:
+        if self._match("OPERATOR", "-"):
+            operator = self._previous()
+            right = self._unary()
+            return Node(kind="UnaryExpression", line=operator.line, column=operator.column, data={"operator": "-", "right": right})
+        return self._primary()
+
+    def _primary(self) -> Node:
+        if self._match("NUMBER"):
+            token = self._previous()
+            value_type = "float" if "." in token.lexeme else "int"
+            return Node(kind="Literal", line=token.line, column=token.column, data={"value": token.lexeme, "valueType": value_type})
+        if self._match("STRING"):
+            token = self._previous()
+            return Node(kind="Literal", line=token.line, column=token.column, data={"value": token.lexeme, "valueType": "string"})
+        if self._match("KEYWORD", "true"):
+            token = self._previous()
+            return Node(kind="Literal", line=token.line, column=token.column, data={"value": True, "valueType": "bool"})
+        if self._match("KEYWORD", "false"):
+            token = self._previous()
+            return Node(kind="Literal", line=token.line, column=token.column, data={"value": False, "valueType": "bool"})
+
+        if self._match("IDENTIFIER"):
+            ident = self._previous()
+            if self._match("PUNCTUATION", "("):
+                args = []
+                if not self._check("PUNCTUATION", ")"):
+                    while True:
+                        args.append(self._expression())
+                        if not self._match("PUNCTUATION", ","):
+                            break
+                self._consume("PUNCTUATION", "Se esperaba ')' en llamada", ")")
+                return Node(kind="FunctionCall", line=ident.line, column=ident.column, data={"name": ident.lexeme, "arguments": args})
+            return Node(kind="Identifier", line=ident.line, column=ident.column, data={"name": ident.lexeme})
+
+        if self._match("PUNCTUATION", "("):
+            expr = self._expression()
+            self._consume("PUNCTUATION", "Se esperaba ')'", ")")
+            return expr
+
+        token = self._current()
+        self.diagnostics.append(
+            Diagnostic(
+                stage="syntax",
+                type="SyntaxError",
+                message=f"Token inesperado: {token.lexeme or token.type}",
+                line=token.line,
+                column=token.column,
+            )
+        )
+        self._advance()
+        return Node(kind="Literal", line=token.line, column=token.column, data={"value": 0, "valueType": "int"})
+
+
+class Scope:
+    def __init__(self, parent: Optional["Scope"] = None):
+        self.parent = parent
+        self.symbols: Dict[str, str] = {}
+
+    def define(self, name: str, typ: str) -> bool:
+        if name in self.symbols:
+            return False
+        self.symbols[name] = typ
+        return True
+
+    def resolve(self, name: str) -> Optional[str]:
+        if name in self.symbols:
+            return self.symbols[name]
+        if self.parent:
+            return self.parent.resolve(name)
+        return None
+
+
+class SemanticAnalyzer:
+    def __init__(self):
+        self.diagnostics: List[Diagnostic] = []
+        self.functions: Dict[str, Dict[str, Any]] = {}
+
+    def analyze(self, program: Node) -> List[Diagnostic]:
+        functions = program.data["functions"]
+        for fn in functions:
+            name = fn.data["name"]
+            if name in self.functions:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", f"Función redeclarada: {name}", fn.line, fn.column)
+                )
+                continue
+            self.functions[name] = {
+                "params": [p["type"] for p in fn.data["params"]],
+                "returnType": fn.data["returnType"],
+                "node": fn,
+            }
+
+        global_scope = Scope()
+        self._analyze_block(program.data["globalBlock"], global_scope, current_fn=None, loop_depth=0)
+
+        for fn in functions:
+            fn_scope = Scope(global_scope)
+            for p in fn.data["params"]:
+                if not fn_scope.define(p["name"], p["type"]):
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", f"Parámetro redeclarado: {p['name']}", p["line"], p["column"])
+                    )
+            has_return = self._analyze_block(fn.data["body"], fn_scope, current_fn=fn, loop_depth=0)
+            if fn.data["returnType"] != "void" and not has_return:
+                self.diagnostics.append(
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"La función '{fn.data['name']}' debe retornar '{fn.data['returnType']}'",
+                        fn.line,
+                        fn.column,
+                    )
+                )
+
+        return self.diagnostics
+
+    def _analyze_block(self, block: Node, scope: Scope, current_fn: Optional[Node], loop_depth: int) -> bool:
+        local_scope = Scope(scope)
+        has_return = False
+        for stmt in block.data["statements"]:
+            stmt_return = self._analyze_statement(stmt, local_scope, current_fn, loop_depth)
+            has_return = has_return or stmt_return
+        return has_return
+
+    def _analyze_statement(self, stmt: Node, scope: Scope, current_fn: Optional[Node], loop_depth: int) -> bool:
+        kind = stmt.kind
+        if kind == "VariableDeclaration":
+            if not scope.define(stmt.data["name"], stmt.data["varType"]):
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", f"Variable redeclarada: {stmt.data['name']}", stmt.line, stmt.column)
+                )
+            if stmt.data.get("initializer"):
+                expr_type = self._infer_expr_type(stmt.data["initializer"], scope)
+                if expr_type and expr_type != stmt.data["varType"]:
+                    self.diagnostics.append(
+                        Diagnostic(
+                            "semantic",
+                            "SemanticError",
+                            f"Tipo incompatible: se esperaba {stmt.data['varType']} y se recibió {expr_type}",
+                            stmt.line,
+                            stmt.column,
+                        )
+                    )
+            return False
+
+        if kind == "ExpressionStatement":
+            self._infer_expr_type(stmt.data["expression"], scope)
+            return False
+
+        if kind == "ReturnStatement":
+            if not current_fn:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "'return' fuera de función", stmt.line, stmt.column)
+                )
+                return True
+            fn_return = current_fn.data["returnType"]
+            value = stmt.data.get("value")
+            if fn_return == "void" and value is not None:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "Una función void no debe retornar valor", stmt.line, stmt.column)
+                )
+            elif fn_return != "void":
+                if value is None:
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", f"Se esperaba retorno de tipo {fn_return}", stmt.line, stmt.column)
+                    )
+                else:
+                    value_type = self._infer_expr_type(value, scope)
+                    if value_type and value_type != fn_return:
+                        self.diagnostics.append(
+                            Diagnostic(
+                                "semantic",
+                                "SemanticError",
+                                f"Tipo de retorno inválido: {value_type}, se esperaba {fn_return}",
+                                stmt.line,
+                                stmt.column,
+                            )
+                        )
+            return True
+
+        if kind == "BlockStatement":
+            return self._analyze_block(stmt, scope, current_fn, loop_depth)
+
+        if kind == "WhileStatement":
+            cond_type = self._infer_expr_type(stmt.data["condition"], scope)
+            if cond_type and cond_type != "bool":
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "La condición de while debe ser bool", stmt.line, stmt.column)
+                )
+            return self._analyze_statement(stmt.data["body"], scope, current_fn, loop_depth + 1)
+
+        if kind == "ForStatement":
+            for_scope = Scope(scope)
+            initializer = stmt.data.get("initializer")
+            if initializer:
+                if initializer.kind == "VariableDeclaration":
+                    self._analyze_statement(initializer, for_scope, current_fn, loop_depth + 1)
+                else:
+                    self._infer_expr_type(initializer, for_scope)
+            condition = stmt.data.get("condition")
+            if condition:
+                cond_type = self._infer_expr_type(condition, for_scope)
+                if cond_type and cond_type != "bool":
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", "La condición de for debe ser bool", stmt.line, stmt.column)
+                    )
+            update = stmt.data.get("update")
+            if update:
+                self._infer_expr_type(update, for_scope)
+            return self._analyze_statement(stmt.data["body"], for_scope, current_fn, loop_depth + 1)
+
+        if kind == "BreakStatement":
+            if loop_depth <= 0:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "'break' fuera de un bucle", stmt.line, stmt.column)
+                )
+            return False
+
+        if kind == "ContinueStatement":
+            if loop_depth <= 0:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "'continue' fuera de un bucle", stmt.line, stmt.column)
+                )
+            return False
+
+        return False
+
+    def _infer_expr_type(self, expr: Node, scope: Scope) -> Optional[str]:
+        if expr.kind == "Literal":
+            return expr.data["valueType"]
+        if expr.kind == "Identifier":
+            typ = scope.resolve(expr.data["name"])
+            if not typ:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", f"Variable no declarada: {expr.data['name']}", expr.line, expr.column)
+                )
+            return typ
+        if expr.kind == "AssignmentExpression":
+            target_type = scope.resolve(expr.data["name"])
+            if not target_type:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", f"Variable no declarada: {expr.data['name']}", expr.line, expr.column)
+                )
+                return None
+            value_type = self._infer_expr_type(expr.data["value"], scope)
+            if value_type and value_type != target_type:
+                self.diagnostics.append(
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"Asignación incompatible para '{expr.data['name']}': {value_type} -> {target_type}",
+                        expr.line,
+                        expr.column,
+                    )
+                )
+            return target_type
+        if expr.kind == "UnaryExpression":
+            right = self._infer_expr_type(expr.data["right"], scope)
+            if right not in {"int", "float"}:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "Operador '-' requiere número", expr.line, expr.column)
+                )
+            return right
+        if expr.kind == "BinaryExpression":
+            left = self._infer_expr_type(expr.data["left"], scope)
+            right = self._infer_expr_type(expr.data["right"], scope)
+            op = expr.data["operator"]
+            if op in {"+", "-", "*", "/"}:
+                if left not in {"int", "float"} or right not in {"int", "float"}:
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", f"Operación '{op}' requiere operandos numéricos", expr.line, expr.column)
+                    )
+                    return None
+                if left == "float" or right == "float":
+                    return "float"
+                return "int"
+            if op in {"==", "!=", "<", ">", "<=", ">="}:
+                if left != right:
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", "Comparación entre tipos incompatibles", expr.line, expr.column)
+                    )
+                return "bool"
+        if expr.kind == "FunctionCall":
+            signature = self.functions.get(expr.data["name"])
+            if not signature:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", f"Función no declarada: {expr.data['name']}", expr.line, expr.column)
+                )
+                return None
+            expected = signature["params"]
+            actual = expr.data["arguments"]
+            if len(expected) != len(actual):
+                self.diagnostics.append(
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"La función '{expr.data['name']}' esperaba {len(expected)} argumentos y recibió {len(actual)}",
+                        expr.line,
+                        expr.column,
+                    )
+                )
+            for idx, arg in enumerate(actual):
+                arg_type = self._infer_expr_type(arg, scope)
+                if idx < len(expected) and arg_type and arg_type != expected[idx]:
+                    self.diagnostics.append(
+                        Diagnostic(
+                            "semantic",
+                            "SemanticError",
+                            f"Argumento {idx + 1} de '{expr.data['name']}' debe ser {expected[idx]} y recibió {arg_type}",
+                            arg.line,
+                            arg.column,
+                        )
+                    )
+            return signature["returnType"]
+        return None
+
+
+class NasmCodeGenerator:
+    def __init__(self):
+        self.lines: List[str] = []
+        self.data_lines: List[str] = []
+        self.bss_lines: List[str] = []
+        self.label_counter = 0
+        self.var_labels: Dict[str, str] = {}
+        self.break_stack: List[str] = []
+        self.continue_stack: List[str] = []
+
+    def _new_label(self, prefix: str) -> str:
+        self.label_counter += 1
+        return f"{prefix}_{self.label_counter}"
+
+    def generate(self, program: Node) -> str:
+        self.lines = ["section .text", "global _start", ""]
+        self.data_lines = ["section .data"]
+        self.bss_lines = ["section .bss"]
+
+        self.lines.append("_start:")
+        self.lines.append("  ; Regla de prioridad: ejecutar primero bloque global implícito y luego main() explícito si existe")
+        self._emit_block(program.data["globalBlock"], scope_name="global")
+
+        has_main = any(fn.data["name"] == "main" for fn in program.data["functions"])
+        if has_main:
+            self.lines.append("  call fn_main")
+
+        self.lines.extend(
+            [
+                "  mov eax, 1",
+                "  xor ebx, ebx",
+                "  int 0x80",
+                "",
+            ]
+        )
+
+        for fn in program.data["functions"]:
+            self.lines.append(f"fn_{fn.data['name']}:")
+            self._emit_block(fn.data["body"], scope_name=f"fn_{fn.data['name']}")
+            if fn.data["returnType"] == "void":
+                self.lines.append("  xor eax, eax")
+            self.lines.append("  ret")
+            self.lines.append("")
+
+        output = []
+        if len(self.data_lines) > 1:
+            output.extend(self.data_lines)
+            output.append("")
+        if len(self.bss_lines) > 1:
+            output.extend(self.bss_lines)
+            output.append("")
+        output.extend(self.lines)
+        return "\n".join(output)
+
+    def _get_var_label(self, scope_name: str, var_name: str) -> str:
+        key = f"{scope_name}:{var_name}"
+        if key not in self.var_labels:
+            label = f"var_{scope_name.replace(':', '_')}_{var_name}"
+            self.var_labels[key] = label
+            self.bss_lines.append(f"{label}: resd 1")
+        return self.var_labels[key]
+
+    def _find_var_label(self, var_name: str) -> Optional[str]:
+        for key, label in reversed(list(self.var_labels.items())):
+            if key.split(":", 1)[1] == var_name:
+                return label
+        return None
+
+    def _emit_block(self, block: Node, scope_name: str):
+        for stmt in block.data["statements"]:
+            self._emit_statement(stmt, scope_name)
+
+    def _emit_statement(self, stmt: Node, scope_name: str):
+        kind = stmt.kind
+        if kind == "VariableDeclaration":
+            label = self._get_var_label(scope_name, stmt.data["name"])
+            if stmt.data.get("initializer"):
+                self._emit_expression(stmt.data["initializer"], scope_name)
+                self.lines.append(f"  mov [{label}], eax")
+            else:
+                self.lines.append(f"  mov dword [{label}], 0")
+            return
+
+        if kind == "ExpressionStatement":
+            self._emit_expression(stmt.data["expression"], scope_name)
+            return
+
+        if kind == "ReturnStatement":
+            if stmt.data.get("value"):
+                self._emit_expression(stmt.data["value"], scope_name)
+            self.lines.append("  ret")
+            return
+
+        if kind == "BlockStatement":
+            self._emit_block(stmt, scope_name)
+            return
+
+        if kind == "WhileStatement":
+            start = self._new_label("while_start")
+            end = self._new_label("while_end")
+            self.break_stack.append(end)
+            self.continue_stack.append(start)
+            self.lines.append(f"{start}:")
+            self._emit_expression(stmt.data["condition"], scope_name)
+            self.lines.append("  cmp eax, 0")
+            self.lines.append(f"  je {end}")
+            self._emit_statement(stmt.data["body"], scope_name)
+            self.lines.append(f"  jmp {start}")
+            self.lines.append(f"{end}:")
+            self.break_stack.pop()
+            self.continue_stack.pop()
+            return
+
+        if kind == "ForStatement":
+            start = self._new_label("for_start")
+            end = self._new_label("for_end")
+            update_label = self._new_label("for_update")
+            self.break_stack.append(end)
+            self.continue_stack.append(update_label)
+
+            if stmt.data.get("initializer"):
+                if stmt.data["initializer"].kind == "VariableDeclaration":
+                    self._emit_statement(stmt.data["initializer"], scope_name)
+                else:
+                    self._emit_expression(stmt.data["initializer"], scope_name)
+
+            self.lines.append(f"{start}:")
+            if stmt.data.get("condition"):
+                self._emit_expression(stmt.data["condition"], scope_name)
+                self.lines.append("  cmp eax, 0")
+                self.lines.append(f"  je {end}")
+            self._emit_statement(stmt.data["body"], scope_name)
+            self.lines.append(f"{update_label}:")
+            if stmt.data.get("update"):
+                self._emit_expression(stmt.data["update"], scope_name)
+            self.lines.append(f"  jmp {start}")
+            self.lines.append(f"{end}:")
+
+            self.break_stack.pop()
+            self.continue_stack.pop()
+            return
+
+        if kind == "BreakStatement":
+            if self.break_stack:
+                self.lines.append(f"  jmp {self.break_stack[-1]}")
+            return
+
+        if kind == "ContinueStatement":
+            if self.continue_stack:
+                self.lines.append(f"  jmp {self.continue_stack[-1]}")
+            return
+
+    def _emit_expression(self, expr: Node, scope_name: str):
+        if expr.kind == "Literal":
+            value = expr.data["value"]
+            if isinstance(value, bool):
+                value = 1 if value else 0
+            if isinstance(value, str) and expr.data["valueType"] == "string":
+                label = self._new_label("str")
+                encoded = value.replace('"', '\\"')
+                self.data_lines.append(f'{label}: db "{encoded}", 0')
+                self.lines.append(f"  mov eax, {label}")
+            else:
+                self.lines.append(f"  mov eax, {value}")
+            return
+
+        if expr.kind == "Identifier":
+            label = self._find_var_label(expr.data["name"])
+            if label:
+                self.lines.append(f"  mov eax, [{label}]")
+            else:
+                self.lines.append("  xor eax, eax")
+            return
+
+        if expr.kind == "AssignmentExpression":
+            self._emit_expression(expr.data["value"], scope_name)
+            label = self._find_var_label(expr.data["name"])
+            if label:
+                self.lines.append(f"  mov [{label}], eax")
+            return
+
+        if expr.kind == "UnaryExpression":
+            self._emit_expression(expr.data["right"], scope_name)
+            self.lines.append("  neg eax")
+            return
+
+        if expr.kind == "BinaryExpression":
+            self._emit_expression(expr.data["left"], scope_name)
+            self.lines.append("  push eax")
+            self._emit_expression(expr.data["right"], scope_name)
+            self.lines.append("  mov ebx, eax")
+            self.lines.append("  pop eax")
+            op = expr.data["operator"]
+            if op == "+":
+                self.lines.append("  add eax, ebx")
+            elif op == "-":
+                self.lines.append("  sub eax, ebx")
+            elif op == "*":
+                self.lines.append("  imul eax, ebx")
+            elif op == "/":
+                self.lines.append("  cdq")
+                self.lines.append("  idiv ebx")
+            else:
+                self.lines.append("  cmp eax, ebx")
+                if op == "==":
+                    self.lines.append("  sete al")
+                elif op == "!=":
+                    self.lines.append("  setne al")
+                elif op == "<":
+                    self.lines.append("  setl al")
+                elif op == ">":
+                    self.lines.append("  setg al")
+                elif op == "<=":
+                    self.lines.append("  setle al")
+                elif op == ">=":
+                    self.lines.append("  setge al")
+                self.lines.append("  movzx eax, al")
+            return
+
+        if expr.kind == "FunctionCall":
+            for arg in expr.data["arguments"]:
+                self._emit_expression(arg, scope_name)
+            self.lines.append(f"  call fn_{expr.data['name']}")
+            return
+
+
+class CompilationPipeline:
+    def run(self, source: str, stage: str = "compile") -> Dict[str, Any]:
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
+        diagnostics = list(lexer.diagnostics)
+
+        if stage == "lexical":
+            return {
+                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
+                "diagnostics": [d.to_dict() for d in diagnostics],
+            }
+
+        if any(d.stage == "lexical" for d in diagnostics):
+            return {
+                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
+                "diagnostics": [d.to_dict() for d in diagnostics],
+                "ast": None,
+                "nasm": "",
+            }
+
+        parser = Parser(tokens)
+        ast = parser.parse()
+        diagnostics.extend(parser.diagnostics)
+
+        if stage == "syntax":
+            return {
+                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
+                "ast": ast.to_dict(),
+                "diagnostics": [d.to_dict() for d in diagnostics],
+            }
+
+        syntax_errors = [d for d in diagnostics if d.stage == "syntax"]
+        if syntax_errors:
+            return {
+                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
+                "ast": ast.to_dict(),
+                "diagnostics": [d.to_dict() for d in diagnostics],
+                "nasm": "",
+            }
+
+        semantic = SemanticAnalyzer()
+        diagnostics.extend(semantic.analyze(ast))
+
+        if stage == "semantic":
+            return {
+                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
+                "ast": ast.to_dict(),
+                "diagnostics": [d.to_dict() for d in diagnostics],
+            }
+
+        semantic_errors = [d for d in diagnostics if d.stage == "semantic"]
+        nasm = ""
+        if not semantic_errors:
+            generator = NasmCodeGenerator()
+            nasm = generator.generate(ast)
+
+        return {
+            "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
+            "ast": ast.to_dict(),
+            "diagnostics": [d.to_dict() for d in diagnostics],
+            "nasm": nasm,
+        }
 
 
 class BackendHandler(BaseHTTPRequestHandler):
-    def _send_json(self, status, payload):
+    pipeline = CompilationPipeline()
+
+    def _send_json(self, status: int, payload: Dict[str, Any]):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -139,33 +1159,71 @@ class BackendHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json(self) -> Dict[str, Any]:
+        content_length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        return json.loads(raw.decode("utf-8"))
+
     def do_OPTIONS(self):
         self._send_json(200, {"ok": True})
 
     def do_POST(self):
-        if self.path != "/api/sintactico":
+        endpoint_map = {
+            "/api/lexico": "lexical",
+            "/api/sintactico": "syntax",
+            "/api/semantico": "semantic",
+            "/api/compile": "compile",
+        }
+        if self.path not in endpoint_map:
             self._send_json(404, {"error": "Ruta no encontrada"})
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(content_length) if content_length > 0 else b"{}"
         try:
-            payload = json.loads(raw.decode("utf-8"))
-            expression = str(payload.get("expression", "")).strip()
-            if not expression:
-                self._send_json(400, {"error": "La expresión está vacía"})
+            payload = self._read_json()
+            source = str(payload.get("source") or payload.get("expression") or "")
+            if not source.strip():
+                self._send_json(
+                    400,
+                    {
+                        "diagnostics": [
+                            Diagnostic("input", "ValidationError", "El código fuente está vacío", 1, 1).to_dict()
+                        ]
+                    },
+                )
                 return
-            tree = parse_expression(expression)
-            self._send_json(200, {"tree": tree})
+            result = self.pipeline.run(source, stage=endpoint_map[self.path])
+            has_errors = any(d["type"].endswith("Error") for d in result.get("diagnostics", []))
+            self._send_json(400 if has_errors else 200, result)
         except json.JSONDecodeError:
-            self._send_json(400, {"error": "JSON inválido"})
-        except ValueError as e:
-            self._send_json(400, {"error": str(e)})
+            self._send_json(
+                400,
+                {"diagnostics": [Diagnostic("input", "ValidationError", "JSON inválido", 1, 1).to_dict()]},
+            )
+        except Exception as exc:  # pragma: no cover
+            self._send_json(
+                500,
+                {
+                    "diagnostics": [
+                        Diagnostic("internal", "InternalError", f"Error interno: {exc}", 1, 1).to_dict()
+                    ]
+                },
+            )
 
 
-def start_backend_server(host="127.0.0.1", port=8000):
+def start_backend_server(host: str = "127.0.0.1", port: int = 8000):
     server = ThreadingHTTPServer((host, port), BackendHandler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     server.thread = thread
     return server
+
+
+if __name__ == "__main__":
+    server = ThreadingHTTPServer(("127.0.0.1", 8000), BackendHandler)
+    try:
+        print("Backend escuchando en http://127.0.0.1:8000")
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
