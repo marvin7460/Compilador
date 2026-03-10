@@ -96,6 +96,27 @@ class CompilationPipelineTests(unittest.TestCase):
         self.assertFalse(compiled["diagnostics"])
         self.assertEqual(compiled["execution"], ["hola"])
 
+    def test_array_loop_execution_with_inferred_types(self):
+        source = """
+        var nums = [1, 2, 3];
+        var total = 0;
+        for (var i = 0; i < nums.length; i = i + 1) {
+            total = total + nums[i];
+        }
+        console.log(total);
+        """
+        result = self.pipeline.run(source, stage="compile")
+        self.assertFalse(result["diagnostics"])
+        self.assertEqual(result["execution"], ["6"])
+
+    def test_array_typing_with_ts_number_annotation(self):
+        source = """
+        let nums: number[] = [1, 2, 3];
+        let first: number = nums[0];
+        """
+        result = self.pipeline.run(source, stage="semantic")
+        self.assertFalse(result["diagnostics"])
+
 
 if __name__ == "__main__":
     unittest.main()

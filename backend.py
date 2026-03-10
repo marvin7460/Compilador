@@ -20,7 +20,7 @@ KEYWORDS = {
     "false",
 }
 
-TYPE_KEYWORDS = {"int", "float", "string", "bool", "void"}
+TYPE_KEYWORDS = {"int", "float", "string", "bool", "void", "number", "boolean", "any"}
 
 
 @dataclass
@@ -177,7 +177,7 @@ class Lexer:
                 self._add_token("OPERATOR", pair, start_line, start_col)
                 continue
 
-            if ch in "+-*/=<>(){};,:!.":
+            if ch in "+-*/=<>(){}[];,:!.":
                 self._advance()
                 token_type = "OPERATOR" if ch in "+-*/=<>!" else "PUNCTUATION"
                 self._add_token(token_type, ch, start_line, start_col)
@@ -266,6 +266,13 @@ class Parser:
         )
         return token
 
+    def _parse_type_annotation(self, message: str) -> str:
+        base_type = self._consume("TYPE", message).lexeme
+        while self._match("PUNCTUATION", "["):
+            self._consume("PUNCTUATION", "Se esperaba ']' en anotación de tipo", "]")
+            base_type = f"{base_type}[]"
+        return base_type
+
     def _synchronize(self):
         while not self._is_at_end():
             if self._previous().lexeme == ";":
@@ -313,11 +320,11 @@ class Parser:
                 param_name = self._consume("IDENTIFIER", "Se esperaba nombre de parámetro")
                 param_type = None
                 if self._match("PUNCTUATION", ":"):
-                    param_type = self._consume("TYPE", "Se esperaba tipo de parámetro")
+                    param_type = self._parse_type_annotation("Se esperaba tipo de parámetro")
                 params.append(
                     {
                         "name": param_name.lexeme,
-                        "type": param_type.lexeme if param_type else "any",
+                        "type": param_type if param_type else "any",
                         "line": param_name.line,
                         "column": param_name.column,
                     }
@@ -328,8 +335,7 @@ class Parser:
 
         return_type = "any"
         if self._match("PUNCTUATION", ":"):
-            token = self._consume("TYPE", "Se esperaba tipo de retorno")
-            return_type = token.lexeme
+            return_type = self._parse_type_annotation("Se esperaba tipo de retorno")
 
         body = self._block_statement()
         if not body:
@@ -391,7 +397,7 @@ class Parser:
         name = self._consume("IDENTIFIER", "Se esperaba identificador")
         type_token = None
         if self._match("PUNCTUATION", ":"):
-            type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+            type_token = self._parse_type_annotation("Se esperaba tipo en declaración")
         initializer = None
         if self._match("OPERATOR", "="):
             initializer = self._expression()
@@ -400,7 +406,7 @@ class Parser:
             kind="VariableDeclaration",
             line=let_token.line,
             column=let_token.column,
-            data={"name": name.lexeme, "varType": type_token.lexeme if type_token else None, "initializer": initializer},
+            data={"name": name.lexeme, "varType": type_token if type_token else None, "initializer": initializer},
         )
 
     def _return_statement(self) -> Node:
@@ -471,7 +477,7 @@ class Parser:
         name = self._consume("IDENTIFIER", "Se esperaba identificador")
         type_token = None
         if self._match("PUNCTUATION", ":"):
-            type_token = self._consume("TYPE", "Se esperaba tipo en declaración")
+            type_token = self._parse_type_annotation("Se esperaba tipo en declaración")
         initializer = None
         if self._match("OPERATOR", "="):
             initializer = self._expression()
@@ -480,7 +486,7 @@ class Parser:
             kind="VariableDeclaration",
             line=let_token.line,
             column=let_token.column,
-            data={"name": name.lexeme, "varType": type_token.lexeme if type_token else None, "initializer": initializer},
+            data={"name": name.lexeme, "varType": type_token if type_token else None, "initializer": initializer},
         )
 
     def _expression_or_assignment_statement(self) -> Node:
@@ -571,6 +577,17 @@ class Parser:
         return self._primary()
 
     def _primary(self) -> Node:
+        if self._match("PUNCTUATION", "["):
+            token = self._previous()
+            elements = []
+            if not self._check("PUNCTUATION", "]"):
+                while True:
+                    elements.append(self._expression())
+                    if not self._match("PUNCTUATION", ","):
+                        break
+            self._consume("PUNCTUATION", "Se esperaba ']' para cerrar array", "]")
+            return Node(kind="ArrayLiteral", line=token.line, column=token.column, data={"elements": elements})
+
         if self._match("NUMBER"):
             token = self._previous()
             value_type = "float" if "." in token.lexeme else "int"
@@ -600,7 +617,17 @@ class Parser:
                             break
                 self._consume("PUNCTUATION", "Se esperaba ')' en llamada", ")")
                 return Node(kind="FunctionCall", line=ident.line, column=ident.column, data={"name": qualified_name, "arguments": args})
-            return Node(kind="Identifier", line=ident.line, column=ident.column, data={"name": qualified_name})
+            expr = Node(kind="Identifier", line=ident.line, column=ident.column, data={"name": qualified_name})
+            while self._match("PUNCTUATION", "["):
+                index_expr = self._expression()
+                self._consume("PUNCTUATION", "Se esperaba ']' en acceso por índice", "]")
+                expr = Node(
+                    kind="IndexExpression",
+                    line=ident.line,
+                    column=ident.column,
+                    data={"array": expr, "index": index_expr},
+                )
+            return expr
 
         if self._match("PUNCTUATION", "("):
             expr = self._expression()
@@ -652,6 +679,25 @@ class SemanticAnalyzer:
     def __init__(self):
         self.diagnostics: List[Diagnostic] = []
         self.functions: Dict[str, Dict[str, Any]] = {}
+
+    def _is_numeric(self, typ: Optional[str]) -> bool:
+        return typ in {"int", "float", "number"}
+
+    def _is_assignable(self, expected: str, actual: str) -> bool:
+        if expected == "any" or actual == "any":
+            return True
+        if expected.endswith("[]") and actual.endswith("[]"):
+            return self._is_assignable(expected[:-2], actual[:-2])
+        if expected == actual:
+            return True
+        if expected == "number" and actual in {"int", "float"}:
+            return True
+        return False
+
+    def _array_element_type(self, typ: Optional[str]) -> Optional[str]:
+        if typ and typ.endswith("[]"):
+            return typ[:-2]
+        return None
 
     def analyze(self, program: Node) -> List[Diagnostic]:
         functions = program.data["functions"]
@@ -713,7 +759,7 @@ class SemanticAnalyzer:
                 )
             if initializer and declared_type and declared_type != "any":
                 expr_type = inferred_type
-                if expr_type and expr_type != declared_type:
+                if expr_type and not self._is_assignable(declared_type, expr_type):
                     self.diagnostics.append(
                         Diagnostic(
                             "semantic",
@@ -754,7 +800,7 @@ class SemanticAnalyzer:
                     )
                 else:
                     value_type = self._infer_expr_type(value, scope)
-                    if value_type and value_type != fn_return:
+                    if value_type and not self._is_assignable(fn_return, value_type):
                         self.diagnostics.append(
                             Diagnostic(
                                 "semantic",
@@ -827,7 +873,41 @@ class SemanticAnalyzer:
     def _infer_expr_type(self, expr: Node, scope: Scope) -> Optional[str]:
         if expr.kind == "Literal":
             return expr.data["valueType"]
+        if expr.kind == "ArrayLiteral":
+            element_types = [self._infer_expr_type(item, scope) for item in expr.data["elements"]]
+            if not element_types:
+                return "any[]"
+            current_type = element_types[0] or "any"
+            for typ in element_types[1:]:
+                candidate = typ or "any"
+                if current_type == "any":
+                    current_type = candidate
+                    continue
+                if candidate == "any":
+                    continue
+                if self._is_numeric(current_type) and self._is_numeric(candidate):
+                    if current_type != candidate:
+                        current_type = "number"
+                    continue
+                if current_type != candidate:
+                    current_type = "any"
+                    break
+            return f"{current_type}[]"
         if expr.kind == "Identifier":
+            if expr.data["name"].endswith(".length"):
+                base_name = expr.data["name"][:-7]
+                base_type = scope.resolve(base_name)
+                if not base_type:
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", f"Variable no declarada: {base_name}", expr.line, expr.column)
+                    )
+                    return None
+                if not self._array_element_type(base_type):
+                    self.diagnostics.append(
+                        Diagnostic("semantic", "SemanticError", f"'{base_name}' no es un array", expr.line, expr.column)
+                    )
+                    return None
+                return "int"
             typ = scope.resolve(expr.data["name"])
             if not typ:
                 self.diagnostics.append(
@@ -845,7 +925,7 @@ class SemanticAnalyzer:
             if target_type == "any" and value_type:
                 scope.assign(expr.data["name"], value_type)
                 return value_type
-            if value_type and target_type != "any" and value_type != target_type:
+            if value_type and target_type != "any" and not self._is_assignable(target_type, value_type):
                 self.diagnostics.append(
                     Diagnostic(
                         "semantic",
@@ -859,9 +939,23 @@ class SemanticAnalyzer:
                     )
                 )
             return target_type
+        if expr.kind == "IndexExpression":
+            array_type = self._infer_expr_type(expr.data["array"], scope)
+            index_type = self._infer_expr_type(expr.data["index"], scope)
+            element_type = self._array_element_type(array_type)
+            if not element_type:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "El acceso por índice requiere un array", expr.line, expr.column)
+                )
+                return None
+            if index_type and not self._is_numeric(index_type):
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "El índice del array debe ser numérico", expr.line, expr.column)
+                )
+            return element_type
         if expr.kind == "UnaryExpression":
             right = self._infer_expr_type(expr.data["right"], scope)
-            if right not in {"int", "float"}:
+            if not self._is_numeric(right):
                 self.diagnostics.append(
                     Diagnostic("semantic", "SemanticError", "Operador '-' requiere número", expr.line, expr.column)
                 )
@@ -873,16 +967,16 @@ class SemanticAnalyzer:
             if op in {"+", "-", "*", "/"}:
                 if left == "any" or right == "any":
                     return "any"
-                if left not in {"int", "float"} or right not in {"int", "float"}:
+                if not self._is_numeric(left) or not self._is_numeric(right):
                     self.diagnostics.append(
                         Diagnostic("semantic", "SemanticError", f"Operación '{op}' requiere operandos numéricos", expr.line, expr.column)
                     )
                     return None
-                if left == "float" or right == "float":
+                if left in {"float", "number"} or right in {"float", "number"}:
                     return "float"
                 return "int"
             if op in {"==", "!=", "<", ">", "<=", ">="}:
-                if left != right:
+                if left and right and not self._is_assignable(left, right) and not self._is_assignable(right, left):
                     self.diagnostics.append(
                         Diagnostic("semantic", "SemanticError", "Comparación entre tipos incompatibles", expr.line, expr.column)
                     )
@@ -915,7 +1009,7 @@ class SemanticAnalyzer:
                 )
             for idx, arg in enumerate(actual):
                 arg_type = self._infer_expr_type(arg, scope)
-                if idx < len(expected) and arg_type and expected[idx] != "any" and arg_type != expected[idx]:
+                if idx < len(expected) and arg_type and expected[idx] != "any" and not self._is_assignable(expected[idx], arg_type):
                     self.diagnostics.append(
                         Diagnostic(
                             "semantic",
@@ -1096,6 +1190,11 @@ class NasmCodeGenerator:
             return
 
     def _emit_expression(self, expr: Node, scope_name: str):
+        if expr.kind == "ArrayLiteral":
+            self.lines.append("  xor eax, eax")
+            self.lines.append("  ; arrays se ejecutan en el intérprete de alto nivel")
+            return
+
         if expr.kind == "Literal":
             value = expr.data["value"]
             if isinstance(value, bool):
@@ -1115,6 +1214,11 @@ class NasmCodeGenerator:
                 self.lines.append(f"  mov eax, [{label}]")
             else:
                 self.lines.append("  xor eax, eax")
+            return
+
+        if expr.kind == "IndexExpression":
+            self.lines.append("  xor eax, eax")
+            self.lines.append("  ; acceso por índice manejado en ejecución del compilador")
             return
 
         if expr.kind == "AssignmentExpression":
@@ -1293,9 +1397,34 @@ class ExecutionEngine:
         if expr is None:
             return None
         if expr.kind == "Literal":
-            return expr.data["value"]
+            value = expr.data["value"]
+            value_type = expr.data.get("valueType")
+            if value_type == "int":
+                return int(value)
+            if value_type in {"float", "number"}:
+                return float(value)
+            return value
+        if expr.kind == "ArrayLiteral":
+            return [self._eval_expression(item, scope) for item in expr.data["elements"]]
         if expr.kind == "Identifier":
+            if expr.data["name"].endswith(".length"):
+                base_name = expr.data["name"][:-7]
+                value = scope.get(base_name)
+                if not isinstance(value, list):
+                    raise RuntimeError(f"'{base_name}' no es un array")
+                return len(value)
             return scope.get(expr.data["name"])
+        if expr.kind == "IndexExpression":
+            collection = self._eval_expression(expr.data["array"], scope)
+            index = self._eval_expression(expr.data["index"], scope)
+            if not isinstance(collection, list):
+                raise RuntimeError("El acceso por índice requiere un array")
+            if not isinstance(index, (int, float)):
+                raise RuntimeError("El índice del array debe ser numérico")
+            int_index = int(index)
+            if int_index < 0 or int_index >= len(collection):
+                raise RuntimeError("Índice de array fuera de rango")
+            return collection[int_index]
         if expr.kind == "AssignmentExpression":
             value = self._eval_expression(expr.data["value"], scope)
             scope.assign(expr.data["name"], value)
