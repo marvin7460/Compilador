@@ -177,7 +177,7 @@ class Lexer:
                 self._add_token("OPERATOR", pair, start_line, start_col)
                 continue
 
-            if ch in "+-*/=<>(){}[];,:!":
+            if ch in "+-*/=<>(){};,:!":
                 self._advance()
                 token_type = "OPERATOR" if ch in "+-*/=<>!" else "PUNCTUATION"
                 self._add_token(token_type, ch, start_line, start_col)
@@ -714,7 +714,10 @@ class SemanticAnalyzer:
                         Diagnostic(
                             "semantic",
                             "SemanticError",
-                            f"Tipo incompatible: se esperaba {declared_type} y se recibió {expr_type}. Sugerencia: ajusta el valor o el tipo declarado.",
+                            (
+                                f"Tipo incompatible: se esperaba {declared_type} y se recibió {expr_type}. "
+                                f"Sugerencia: declara '{stmt.data['name']}: {expr_type}' o cambia el valor a tipo {declared_type}."
+                            ),
                             stmt.line,
                             stmt.column,
                         )
@@ -843,7 +846,10 @@ class SemanticAnalyzer:
                     Diagnostic(
                         "semantic",
                         "SemanticError",
-                        f"Asignación incompatible para '{expr.data['name']}': {value_type} -> {target_type}. Sugerencia: convierte el valor o usa un tipo compatible.",
+                        (
+                            f"Asignación incompatible para '{expr.data['name']}': {value_type} -> {target_type}. "
+                            f"Sugerencia: convierte '{value_type}' a '{target_type}' o cambia el tipo de '{expr.data['name']}'."
+                        ),
                         expr.line,
                         expr.column,
                     )
@@ -891,7 +897,10 @@ class SemanticAnalyzer:
                     Diagnostic(
                         "semantic",
                         "SemanticError",
-                        f"La función '{expr.data['name']}' esperaba {len(expected)} argumentos y recibió {len(actual)}. Sugerencia: corrige la cantidad de parámetros en la llamada.",
+                        (
+                            f"La función '{expr.data['name']}' esperaba {len(expected)} argumentos y recibió {len(actual)}. "
+                            f"Firma esperada: {expr.data['name']}({', '.join(expected)})."
+                        ),
                         expr.line,
                         expr.column,
                     )

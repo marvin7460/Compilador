@@ -38,6 +38,10 @@ function formatTokens(tokens) {
   return tokens.map((t) => `${t.type}(${t.lexeme}) @ ${t.line}:${t.column}`).join("\n");
 }
 
+function formatCompileConsole(tokensPanel, astPanel, nasmPanel) {
+  return `${tokensPanel}\n\nAST:\n${astPanel}\n\nNASM:\n${nasmPanel}`;
+}
+
 export default function App() {
   const [tabs, setTabs] = useState(INITIAL_TABS);
   const [activeTabId, setActiveTabId] = useState(1);
@@ -172,7 +176,10 @@ export default function App() {
     }
   };
 
-  const compileConsole = `${tokensPanel}\n\nAST:\n${astPanel}\n\nNASM:\n${nasmPanel}`;
+  const compileConsole = useMemo(
+    () => formatCompileConsole(tokensPanel, astPanel, nasmPanel),
+    [tokensPanel, astPanel, nasmPanel]
+  );
 
   return (
     <div className="app">

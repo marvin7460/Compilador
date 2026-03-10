@@ -13,7 +13,10 @@ export function openExecutionView() {
       return { supported: false, error: error?.message || "No se pudo abrir webviewer." };
     }
   }
-  return { supported: false, error: "Webviewer no disponible. Usando terminal embebida." };
+  return {
+    supported: false,
+    error: "Webviewer no disponible en este entorno. Se usará la terminal embebida de la UI.",
+  };
 }
 
 export function sendOutputToExecutionView(payload) {
