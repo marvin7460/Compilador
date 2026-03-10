@@ -84,6 +84,41 @@ class CompilationPipelineTests(unittest.TestCase):
         result = self.pipeline.run(source, stage="semantic")
         self.assertFalse(result["diagnostics"])
 
+    def test_bubble_sort_function_with_index_assignment_and_trailing_semicolons(self):
+        source = """
+        function bubbleSort(arr){
+            let n = arr.length;
+            for (let i = 0; i < n - 1; i=i+1){
+                for (let j = 0; j < n - i - 1; j=j+1){
+                    if (arr[j] > arr[j + 1]) {
+                        let temp = arr[j];
+                        arr[j] = arr[j + 1];
+                        arr[j + 1] = temp;
+                    };
+                };
+            };
+            return arr;
+        };
+        let numeros = [5, 3, 8, 4, 2];
+        console.log(bubbleSort(numeros));
+        """
+        result = self.pipeline.run(source, stage="compile")
+        self.assertFalse(result["diagnostics"])
+        self.assertEqual(result["execution"], ["[2, 3, 4, 5, 8]"])
+
+    def test_comments_are_ignored_during_compilation(self):
+        source = """
+        // comentario de una línea
+        var nums = [3, 1];
+        /* comentario
+           de bloque */
+        nums[0] = nums[1];
+        console.log(nums[0]);
+        """
+        result = self.pipeline.run(source, stage="compile")
+        self.assertFalse(result["diagnostics"])
+        self.assertEqual(result["execution"], ["1"])
+
     def test_console_log_tokenizes_and_executes(self):
         source = 'console.log("hola");'
         lexical = self.pipeline.run(source, stage="lexical")

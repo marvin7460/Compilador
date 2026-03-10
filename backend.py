@@ -108,6 +108,27 @@ class Lexer:
                 while self._peek() not in {"\n", "\0"}:
                     self._advance()
                 continue
+            if ch == "/" and self._peek_next() == "*":
+                self._advance()
+                self._advance()
+                while True:
+                    if self._peek() == "\0":
+                        self.diagnostics.append(
+                            Diagnostic(
+                                stage="lexical",
+                                type="LexicalError",
+                                message="Comentario de bloque sin cerrar",
+                                line=start_line,
+                                column=start_col,
+                            )
+                        )
+                        break
+                    if self._peek() == "*" and self._peek_next() == "/":
+                        self._advance()
+                        self._advance()
+                        break
+                    self._advance()
+                continue
 
             if ch.isalpha() or ch == "_":
                 ident = []
@@ -366,6 +387,8 @@ class Parser:
 
     def _statement(self) -> Optional[Node]:
         try:
+            if self._match("PUNCTUATION", ";"):
+                return None
             if self._match("KEYWORD", "let") or self._match("KEYWORD", "var"):
                 return self._variable_declaration()
             if self._match("KEYWORD", "return"):
@@ -495,19 +518,28 @@ class Parser:
         return Node(kind="ExpressionStatement", line=expr.line, column=expr.column, data={"expression": expr})
 
     def _assignment_or_expression(self) -> Node:
-        if self._check("IDENTIFIER") and self.index + 1 < len(self.tokens):
-            next_token = self.tokens[self.index + 1]
-            if next_token.type == "OPERATOR" and next_token.lexeme == "=":
-                name = self._advance()
-                equals = self._advance()
-                value = self._expression()
+        expr = self._expression()
+        if self._match("OPERATOR", "="):
+            equals = self._previous()
+            value = self._assignment_or_expression()
+            if expr.kind == "Identifier":
                 return Node(
                     kind="AssignmentExpression",
                     line=equals.line,
                     column=equals.column,
-                    data={"name": name.lexeme, "value": value},
+                    data={"name": expr.data["name"], "value": value},
                 )
-        return self._expression()
+            if expr.kind == "IndexExpression":
+                return Node(
+                    kind="IndexAssignmentExpression",
+                    line=equals.line,
+                    column=equals.column,
+                    data={"array": expr.data["array"], "index": expr.data["index"], "value": value},
+                )
+            self.diagnostics.append(
+                Diagnostic("syntax", "SyntaxError", "Objetivo de asignación inválido", equals.line, equals.column)
+            )
+        return expr
 
     def _expression(self) -> Node:
         return self._equality()
@@ -902,6 +934,8 @@ class SemanticAnalyzer:
                         Diagnostic("semantic", "SemanticError", f"Variable no declarada: {base_name}", expr.line, expr.column)
                     )
                     return None
+                if base_type == "any":
+                    return "int"
                 if not self._array_element_type(base_type):
                     self.diagnostics.append(
                         Diagnostic("semantic", "SemanticError", f"'{base_name}' no es un array", expr.line, expr.column)
@@ -939,10 +973,35 @@ class SemanticAnalyzer:
                     )
                 )
             return target_type
+        if expr.kind == "IndexAssignmentExpression":
+            array_type = self._infer_expr_type(expr.data["array"], scope)
+            index_type = self._infer_expr_type(expr.data["index"], scope)
+            element_type = "any" if array_type == "any" else self._array_element_type(array_type)
+            if not element_type:
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "La asignación por índice requiere un array", expr.line, expr.column)
+                )
+                return None
+            if index_type and not self._is_numeric(index_type):
+                self.diagnostics.append(
+                    Diagnostic("semantic", "SemanticError", "El índice del array debe ser numérico", expr.line, expr.column)
+                )
+            value_type = self._infer_expr_type(expr.data["value"], scope)
+            if value_type and element_type != "any" and not self._is_assignable(element_type, value_type):
+                self.diagnostics.append(
+                    Diagnostic(
+                        "semantic",
+                        "SemanticError",
+                        f"Asignación incompatible para elemento de array: {value_type} -> {element_type}",
+                        expr.line,
+                        expr.column,
+                    )
+                )
+            return element_type
         if expr.kind == "IndexExpression":
             array_type = self._infer_expr_type(expr.data["array"], scope)
             index_type = self._infer_expr_type(expr.data["index"], scope)
-            element_type = self._array_element_type(array_type)
+            element_type = "any" if array_type == "any" else self._array_element_type(array_type)
             if not element_type:
                 self.diagnostics.append(
                     Diagnostic("semantic", "SemanticError", "El acceso por índice requiere un array", expr.line, expr.column)
@@ -1227,6 +1286,10 @@ class NasmCodeGenerator:
             if label:
                 self.lines.append(f"  mov [{label}], eax")
             return
+        if expr.kind == "IndexAssignmentExpression":
+            self._emit_expression(expr.data["value"], scope_name)
+            self.lines.append("  ; asignación por índice manejada en ejecución del compilador")
+            return
 
         if expr.kind == "UnaryExpression":
             self._emit_expression(expr.data["right"], scope_name)
@@ -1428,6 +1491,19 @@ class ExecutionEngine:
         if expr.kind == "AssignmentExpression":
             value = self._eval_expression(expr.data["value"], scope)
             scope.assign(expr.data["name"], value)
+            return value
+        if expr.kind == "IndexAssignmentExpression":
+            collection = self._eval_expression(expr.data["array"], scope)
+            index = self._eval_expression(expr.data["index"], scope)
+            if not isinstance(collection, list):
+                raise RuntimeError("La asignación por índice requiere un array")
+            if not isinstance(index, (int, float)):
+                raise RuntimeError("El índice del array debe ser numérico")
+            int_index = int(index)
+            if int_index < 0 or int_index >= len(collection):
+                raise RuntimeError("Índice de array fuera de rango")
+            value = self._eval_expression(expr.data["value"], scope)
+            collection[int_index] = value
             return value
         if expr.kind == "UnaryExpression":
             right = self._eval_expression(expr.data["right"], scope)
