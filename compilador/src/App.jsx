@@ -8,6 +8,7 @@ const STAGES = [
   { id: "semantico", label: "Semántico", path: "/api/semantico" },
   { id: "compile", label: "Compilar", path: "/api/compile" },
 ];
+const INITIAL_TABS = [{ id: 1, name: "programa.ts", content: "" }];
 
 function downloadText(filename, text, mimeType = "text/plain;charset=utf-8") {
   const blob = new Blob([text], { type: mimeType });
@@ -37,13 +38,14 @@ function formatTokens(tokens) {
 }
 
 export default function App() {
-  const [tabs, setTabs] = useState([{ id: 1, name: "programa.ts", content: "" }]);
+  const [tabs, setTabs] = useState(INITIAL_TABS);
   const [activeTabId, setActiveTabId] = useState(1);
   const [tokensPanel, setTokensPanel] = useState("Sin análisis léxico.");
   const [nasmPanel, setNasmPanel] = useState("Sin compilación.");
   const [terminal, setTerminal] = useState("Terminal lista.\n");
   const [errorPanel, setErrorPanel] = useState("Sin errores.\n");
   const fileInputRef = useRef(null);
+  const tabIdCounterRef = useRef(INITIAL_TABS.length + 1);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
@@ -66,7 +68,7 @@ export default function App() {
 
     const opened = await Promise.all(
       files.map(async (f) => ({
-        id: Date.now() + Math.random(),
+        id: tabIdCounterRef.current++,
         name: ensureTsFilename(f.name),
         content: await f.text(),
       }))
@@ -102,7 +104,7 @@ export default function App() {
 
   const onNewTab = () => {
     const newTab = {
-      id: Date.now() + Math.random(),
+      id: tabIdCounterRef.current++,
       name: `nuevo_${tabs.length + 1}.ts`,
       content: "",
     };

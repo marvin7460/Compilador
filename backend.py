@@ -22,6 +22,8 @@ TYPE_KEYWORDS = {"int", "float", "string", "bool", "void"}
 
 @dataclass
 class Diagnostic:
+    """Reporte unificado de diagnóstico del compilador por etapa y posición."""
+
     stage: str
     type: str
     message: str
@@ -1198,6 +1200,11 @@ class BackendHandler(BaseHTTPRequestHandler):
             self._send_json(
                 400,
                 {"diagnostics": [Diagnostic("input", "ValidationError", "JSON inválido", 1, 1).to_dict()]},
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            self._send_json(
+                400,
+                {"diagnostics": [Diagnostic("input", "ValidationError", str(exc), 1, 1).to_dict()]},
             )
         except Exception as exc:  # pragma: no cover
             self._send_json(
