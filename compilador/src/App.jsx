@@ -143,7 +143,9 @@ export default function App() {
 
       if (!response.ok) {
         appendCompileTerminal(`[Compilador] Etapa ${stage.label}: finalizada con errores.`);
-        appendExecutionTerminal(`[Ejecución] No disponible por errores en ${stage.label}.`);
+        if (stage.id === "compile") {
+          appendExecutionTerminal("[Ejecución] No disponible por errores de compilación.");
+        }
         setActiveTerminalTab("errors");
       } else {
         appendCompileTerminal(`[Compilador] Etapa ${stage.label}: OK.`);
