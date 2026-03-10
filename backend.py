@@ -177,7 +177,7 @@ class Lexer:
                 self._add_token("OPERATOR", pair, start_line, start_col)
                 continue
 
-            if ch in "+-*/=<>(){};,:!":
+            if ch in "+-*/=<>(){};,:!.":
                 self._advance()
                 token_type = "OPERATOR" if ch in "+-*/=<>!" else "PUNCTUATION"
                 self._add_token(token_type, ch, start_line, start_col)
@@ -587,6 +587,10 @@ class Parser:
 
         if self._match("IDENTIFIER"):
             ident = self._previous()
+            qualified_name = ident.lexeme
+            while self._match("PUNCTUATION", "."):
+                member = self._consume("IDENTIFIER", "Se esperaba identificador después de '.'")
+                qualified_name = f"{qualified_name}.{member.lexeme}"
             if self._match("PUNCTUATION", "("):
                 args = []
                 if not self._check("PUNCTUATION", ")"):
@@ -595,8 +599,8 @@ class Parser:
                         if not self._match("PUNCTUATION", ","):
                             break
                 self._consume("PUNCTUATION", "Se esperaba ')' en llamada", ")")
-                return Node(kind="FunctionCall", line=ident.line, column=ident.column, data={"name": ident.lexeme, "arguments": args})
-            return Node(kind="Identifier", line=ident.line, column=ident.column, data={"name": ident.lexeme})
+                return Node(kind="FunctionCall", line=ident.line, column=ident.column, data={"name": qualified_name, "arguments": args})
+            return Node(kind="Identifier", line=ident.line, column=ident.column, data={"name": qualified_name})
 
         if self._match("PUNCTUATION", "("):
             expr = self._expression()
@@ -884,6 +888,10 @@ class SemanticAnalyzer:
                     )
                 return "bool"
         if expr.kind == "FunctionCall":
+            if expr.data["name"] == "console.log":
+                for arg in expr.data["arguments"]:
+                    self._infer_expr_type(arg, scope)
+                return "void"
             signature = self.functions.get(expr.data["name"])
             if not signature:
                 self.diagnostics.append(
@@ -1155,74 +1163,273 @@ class NasmCodeGenerator:
             return
 
         if expr.kind == "FunctionCall":
+            if expr.data["name"] == "console.log":
+                if expr.data["arguments"]:
+                    self._emit_expression(expr.data["arguments"][-1], scope_name)
+                else:
+                    self.lines.append("  xor eax, eax")
+                self.lines.append("  ; console.log manejado en ejecución del compilador")
+                return
             for arg in expr.data["arguments"]:
                 self._emit_expression(arg, scope_name)
             self.lines.append(f"  call fn_{expr.data['name']}")
             return
 
 
+class RuntimeScope:
+    def __init__(self, parent: Optional["RuntimeScope"] = None):
+        self.parent = parent
+        self.values: Dict[str, Any] = {}
+
+    def define(self, name: str, value: Any):
+        self.values[name] = value
+
+    def get(self, name: str) -> Any:
+        if name in self.values:
+            return self.values[name]
+        if self.parent:
+            return self.parent.get(name)
+        raise RuntimeError(f"Variable no declarada: {name}")
+
+    def assign(self, name: str, value: Any):
+        if name in self.values:
+            self.values[name] = value
+            return
+        if self.parent:
+            self.parent.assign(name, value)
+            return
+        raise RuntimeError(f"Variable no declarada: {name}")
+
+
+class RuntimeControl(Exception):
+    pass
+
+
+class RuntimeReturn(RuntimeControl):
+    def __init__(self, value: Any):
+        self.value = value
+
+
+class RuntimeBreak(RuntimeControl):
+    pass
+
+
+class RuntimeContinue(RuntimeControl):
+    pass
+
+
+class ExecutionEngine:
+    def __init__(self):
+        self.outputs: List[str] = []
+        self.functions: Dict[str, Node] = {}
+
+    def execute(self, program: Node) -> List[str]:
+        self.outputs = []
+        self.functions = {fn.data["name"]: fn for fn in program.data["functions"]}
+        global_scope = RuntimeScope()
+        self._exec_block(program.data["globalBlock"], global_scope)
+        if "main" in self.functions:
+            self._call_function("main", [], global_scope)
+        return self.outputs
+
+    def _exec_block(self, block: Node, scope: RuntimeScope):
+        block_scope = RuntimeScope(scope)
+        for stmt in block.data["statements"]:
+            self._exec_statement(stmt, block_scope)
+
+    def _exec_statement(self, stmt: Node, scope: RuntimeScope):
+        kind = stmt.kind
+        if kind == "VariableDeclaration":
+            value = self._eval_expression(stmt.data["initializer"], scope) if stmt.data.get("initializer") else 0
+            scope.define(stmt.data["name"], value)
+            return
+        if kind == "ExpressionStatement":
+            self._eval_expression(stmt.data["expression"], scope)
+            return
+        if kind == "ReturnStatement":
+            value = self._eval_expression(stmt.data["value"], scope) if stmt.data.get("value") else None
+            raise RuntimeReturn(value)
+        if kind == "BlockStatement":
+            self._exec_block(stmt, scope)
+            return
+        if kind == "IfStatement":
+            if self._eval_expression(stmt.data["condition"], scope):
+                self._exec_statement(stmt.data["thenBranch"], scope)
+            elif stmt.data.get("elseBranch"):
+                self._exec_statement(stmt.data["elseBranch"], scope)
+            return
+        if kind == "WhileStatement":
+            while self._eval_expression(stmt.data["condition"], scope):
+                try:
+                    self._exec_statement(stmt.data["body"], scope)
+                except RuntimeContinue:
+                    continue
+                except RuntimeBreak:
+                    break
+            return
+        if kind == "ForStatement":
+            loop_scope = RuntimeScope(scope)
+            if stmt.data.get("initializer"):
+                self._exec_statement(stmt.data["initializer"], loop_scope)
+            while True:
+                condition = stmt.data.get("condition")
+                if condition is not None and not self._eval_expression(condition, loop_scope):
+                    break
+                try:
+                    self._exec_statement(stmt.data["body"], loop_scope)
+                except RuntimeContinue:
+                    pass
+                except RuntimeBreak:
+                    break
+                if stmt.data.get("update"):
+                    self._eval_expression(stmt.data["update"], loop_scope)
+            return
+        if kind == "BreakStatement":
+            raise RuntimeBreak()
+        if kind == "ContinueStatement":
+            raise RuntimeContinue()
+
+    def _eval_expression(self, expr: Optional[Node], scope: RuntimeScope) -> Any:
+        if expr is None:
+            return None
+        if expr.kind == "Literal":
+            return expr.data["value"]
+        if expr.kind == "Identifier":
+            return scope.get(expr.data["name"])
+        if expr.kind == "AssignmentExpression":
+            value = self._eval_expression(expr.data["value"], scope)
+            scope.assign(expr.data["name"], value)
+            return value
+        if expr.kind == "UnaryExpression":
+            right = self._eval_expression(expr.data["right"], scope)
+            if expr.data["operator"] == "-":
+                return -right
+        if expr.kind == "BinaryExpression":
+            left = self._eval_expression(expr.data["left"], scope)
+            right = self._eval_expression(expr.data["right"], scope)
+            op = expr.data["operator"]
+            if op == "+":
+                return left + right
+            if op == "-":
+                return left - right
+            if op == "*":
+                return left * right
+            if op == "/":
+                if right == 0:
+                    raise RuntimeError("División entre cero en tiempo de ejecución")
+                if isinstance(left, int) and isinstance(right, int):
+                    return left // right
+                return left / right
+            if op == "==":
+                return left == right
+            if op == "!=":
+                return left != right
+            if op == "<":
+                return left < right
+            if op == ">":
+                return left > right
+            if op == "<=":
+                return left <= right
+            if op == ">=":
+                return left >= right
+        if expr.kind == "FunctionCall":
+            if expr.data["name"] == "console.log":
+                values = [self._eval_expression(arg, scope) for arg in expr.data["arguments"]]
+                self.outputs.append(" ".join(str(v) for v in values))
+                return None
+            args = [self._eval_expression(arg, scope) for arg in expr.data["arguments"]]
+            return self._call_function(expr.data["name"], args, scope)
+        return None
+
+    def _call_function(self, name: str, args: List[Any], scope: RuntimeScope) -> Any:
+        function = self.functions.get(name)
+        if not function:
+            raise RuntimeError(f"Función no declarada: {name}")
+        params = function.data["params"]
+        if len(params) != len(args):
+            raise RuntimeError(f"La función '{name}' esperaba {len(params)} argumentos y recibió {len(args)}")
+        fn_scope = RuntimeScope(scope)
+        for idx, param in enumerate(params):
+            fn_scope.define(param["name"], args[idx])
+        try:
+            self._exec_block(function.data["body"], fn_scope)
+        except RuntimeReturn as result:
+            return result.value
+        return None
+
+
 class CompilationPipeline:
     def run(self, source: str, stage: str = "compile") -> Dict[str, Any]:
+        process_logs = ["Análisis léxico iniciado."]
         lexer = Lexer(source)
         tokens = lexer.tokenize()
         diagnostics = list(lexer.diagnostics)
+        process_logs.append("Análisis léxico completado.")
+
+        token_payload = [t.to_dict() for t in tokens if t.type != "EOF"]
+
+        def make_payload(ast_node: Optional[Node] = None, nasm: str = "", execution: Optional[List[str]] = None) -> Dict[str, Any]:
+            return {
+                "tokens": token_payload,
+                "ast": ast_node.to_dict() if ast_node else None,
+                "diagnostics": [d.to_dict() for d in diagnostics],
+                "nasm": nasm,
+                "execution": execution or [],
+                "processLogs": process_logs,
+            }
 
         if stage == "lexical":
-            return {
-                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
-                "diagnostics": [d.to_dict() for d in diagnostics],
-            }
+            process_logs.append("Etapa léxica finalizada.")
+            return make_payload()
 
         if any(d.stage == "lexical" for d in diagnostics):
-            return {
-                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
-                "diagnostics": [d.to_dict() for d in diagnostics],
-                "ast": None,
-                "nasm": "",
-            }
+            process_logs.append("Errores léxicos detectados. Se detiene el pipeline.")
+            return make_payload()
 
+        process_logs.append("Parsing iniciado.")
         parser = Parser(tokens)
         ast = parser.parse()
         diagnostics.extend(parser.diagnostics)
+        process_logs.append("Parsing completado.")
 
         if stage == "syntax":
-            return {
-                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
-                "ast": ast.to_dict(),
-                "diagnostics": [d.to_dict() for d in diagnostics],
-            }
+            process_logs.append("Etapa sintáctica finalizada.")
+            return make_payload(ast_node=ast)
 
         syntax_errors = [d for d in diagnostics if d.stage == "syntax"]
         if syntax_errors:
-            return {
-                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
-                "ast": ast.to_dict(),
-                "diagnostics": [d.to_dict() for d in diagnostics],
-                "nasm": "",
-            }
+            process_logs.append("Errores sintácticos detectados. Se omiten etapas posteriores.")
+            return make_payload(ast_node=ast)
 
+        process_logs.append("Análisis semántico iniciado.")
         semantic = SemanticAnalyzer()
         diagnostics.extend(semantic.analyze(ast))
+        process_logs.append("Análisis semántico completado.")
 
         if stage == "semantic":
-            return {
-                "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
-                "ast": ast.to_dict(),
-                "diagnostics": [d.to_dict() for d in diagnostics],
-            }
+            process_logs.append("Etapa semántica finalizada.")
+            return make_payload(ast_node=ast)
 
         semantic_errors = [d for d in diagnostics if d.stage == "semantic"]
         nasm = ""
+        execution: List[str] = []
         if not semantic_errors:
+            process_logs.append("Generación de ensamblador iniciada.")
             generator = NasmCodeGenerator()
             nasm = generator.generate(ast)
+            process_logs.append("Generación de ensamblador completada.")
 
-        return {
-            "tokens": [t.to_dict() for t in tokens if t.type != "EOF"],
-            "ast": ast.to_dict(),
-            "diagnostics": [d.to_dict() for d in diagnostics],
-            "nasm": nasm,
-        }
+            process_logs.append("Ejecución del programa iniciada.")
+            try:
+                execution = ExecutionEngine().execute(ast)
+                process_logs.append("Ejecución del programa completada.")
+            except RuntimeError as exc:
+                diagnostics.append(Diagnostic("execution", "RuntimeError", str(exc), 1, 1))
+                process_logs.append("Ejecución del programa finalizada con error.")
+        else:
+            process_logs.append("Errores semánticos detectados. Se omiten ensamblador y ejecución.")
+
+        return make_payload(ast_node=ast, nasm=nasm, execution=execution)
 
 
 class BackendHandler(BaseHTTPRequestHandler):

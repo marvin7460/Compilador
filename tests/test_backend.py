@@ -84,6 +84,18 @@ class CompilationPipelineTests(unittest.TestCase):
         result = self.pipeline.run(source, stage="semantic")
         self.assertFalse(result["diagnostics"])
 
+    def test_console_log_tokenizes_and_executes(self):
+        source = 'console.log("hola");'
+        lexical = self.pipeline.run(source, stage="lexical")
+        lexemes = [t["lexeme"] for t in lexical["tokens"]]
+        self.assertIn(".", lexemes)
+        self.assertIn("console", lexemes)
+        self.assertIn("log", lexemes)
+
+        compiled = self.pipeline.run(source, stage="compile")
+        self.assertFalse(compiled["diagnostics"])
+        self.assertEqual(compiled["execution"], ["hola"])
+
 
 if __name__ == "__main__":
     unittest.main()
